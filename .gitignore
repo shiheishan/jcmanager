@@ -1,0 +1,6 @@
+.gocache/
+.tools/
+.bin/
+
+# Local editor/tooling state
+.DS_Store
