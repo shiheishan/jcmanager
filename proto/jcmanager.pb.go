@@ -207,6 +207,7 @@ type RegisterRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Node          *NodeInfo              `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
 	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	SessionToken  string                 `protobuf:"bytes,3,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -255,11 +256,19 @@ func (x *RegisterRequest) GetToken() string {
 	return ""
 }
 
+func (x *RegisterRequest) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
+}
+
 type RegisterResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	NodeId           string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	DisplayName      string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	RegisteredAtUnix int64                  `protobuf:"varint,3,opt,name=registered_at_unix,json=registeredAtUnix,proto3" json:"registered_at_unix,omitempty"`
+	SessionToken     string                 `protobuf:"bytes,4,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -315,9 +324,17 @@ func (x *RegisterResponse) GetRegisteredAtUnix() int64 {
 	return 0
 }
 
+func (x *RegisterResponse) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
+}
+
 type WatchCommandsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	SessionToken  string                 `protobuf:"bytes,2,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -359,9 +376,17 @@ func (x *WatchCommandsRequest) GetNodeId() string {
 	return ""
 }
 
+func (x *WatchCommandsRequest) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
+}
+
 type HeartbeatRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Status        *NodeStatus            `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	SessionToken  string                 `protobuf:"bytes,2,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -403,9 +428,17 @@ func (x *HeartbeatRequest) GetStatus() *NodeStatus {
 	return nil
 }
 
+func (x *HeartbeatRequest) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
+}
+
 type ReportResultRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Result        *CommandResult         `protobuf:"bytes,1,opt,name=result,proto3" json:"result,omitempty"`
+	SessionToken  string                 `protobuf:"bytes,2,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -445,6 +478,13 @@ func (x *ReportResultRequest) GetResult() *CommandResult {
 		return x.Result
 	}
 	return nil
+}
+
+func (x *ReportResultRequest) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
 }
 
 type NodeInfo struct {
@@ -2067,20 +2107,25 @@ const file_proto_jcmanager_proto_rawDesc = "" +
 	"\x03Ack\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12(\n" +
-	"\x10server_time_unix\x18\x03 \x01(\x03R\x0eserverTimeUnix\"S\n" +
+	"\x10server_time_unix\x18\x03 \x01(\x03R\x0eserverTimeUnix\"x\n" +
 	"\x0fRegisterRequest\x12*\n" +
 	"\x04node\x18\x01 \x01(\v2\x16.jcmanager.v1.NodeInfoR\x04node\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"|\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\x12#\n" +
+	"\rsession_token\x18\x03 \x01(\tR\fsessionToken\"\xa1\x01\n" +
 	"\x10RegisterResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12,\n" +
-	"\x12registered_at_unix\x18\x03 \x01(\x03R\x10registeredAtUnix\"/\n" +
+	"\x12registered_at_unix\x18\x03 \x01(\x03R\x10registeredAtUnix\x12#\n" +
+	"\rsession_token\x18\x04 \x01(\tR\fsessionToken\"T\n" +
 	"\x14WatchCommandsRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"D\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12#\n" +
+	"\rsession_token\x18\x02 \x01(\tR\fsessionToken\"i\n" +
 	"\x10HeartbeatRequest\x120\n" +
-	"\x06status\x18\x01 \x01(\v2\x18.jcmanager.v1.NodeStatusR\x06status\"J\n" +
+	"\x06status\x18\x01 \x01(\v2\x18.jcmanager.v1.NodeStatusR\x06status\x12#\n" +
+	"\rsession_token\x18\x02 \x01(\tR\fsessionToken\"o\n" +
 	"\x13ReportResultRequest\x123\n" +
-	"\x06result\x18\x01 \x01(\v2\x1b.jcmanager.v1.CommandResultR\x06result\"\xb0\x02\n" +
+	"\x06result\x18\x01 \x01(\v2\x1b.jcmanager.v1.CommandResultR\x06result\x12#\n" +
+	"\rsession_token\x18\x02 \x01(\tR\fsessionToken\"\xb0\x02\n" +
 	"\bNodeInfo\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12!\n" +

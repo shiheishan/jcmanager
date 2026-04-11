@@ -20,24 +20,29 @@ message Ack {
 message RegisterRequest {
   NodeInfo node = 1;
   string token = 2;
+  string session_token = 3;
 }
 
 message RegisterResponse {
   string node_id = 1;
   string display_name = 2;
   int64 registered_at_unix = 3;
+  string session_token = 4;
 }
 
 message WatchCommandsRequest {
   string node_id = 1;
+  string session_token = 2;
 }
 
 message HeartbeatRequest {
   NodeStatus status = 1;
+  string session_token = 2;
 }
 
 message ReportResultRequest {
   CommandResult result = 1;
+  string session_token = 2;
 }
 
 message NodeInfo {

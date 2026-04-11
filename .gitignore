@@ -1,6 +1,9 @@
 .gocache/
+.gomodcache/
 .tools/
 .bin/
+web/node_modules/
+web/dist/
 
 # Local editor/tooling state
 .DS_Store
