@@ -21,6 +21,7 @@ message RegisterRequest {
   NodeInfo node = 1;
   string token = 2;
   string session_token = 3;
+  string install_secret = 4;
 }
 
 message RegisterResponse {

@@ -1,0 +1,9 @@
+.git
+.gocache
+.gomodcache
+.tools
+.bin
+agents
+web/dist
+web/node_modules
+node_modules

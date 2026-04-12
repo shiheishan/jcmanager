@@ -208,6 +208,7 @@ type RegisterRequest struct {
 	Node          *NodeInfo              `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
 	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
 	SessionToken  string                 `protobuf:"bytes,3,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
+	InstallSecret string                 `protobuf:"bytes,4,opt,name=install_secret,json=installSecret,proto3" json:"install_secret,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -259,6 +260,13 @@ func (x *RegisterRequest) GetToken() string {
 func (x *RegisterRequest) GetSessionToken() string {
 	if x != nil {
 		return x.SessionToken
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetInstallSecret() string {
+	if x != nil {
+		return x.InstallSecret
 	}
 	return ""
 }
@@ -2107,11 +2115,12 @@ const file_proto_jcmanager_proto_rawDesc = "" +
 	"\x03Ack\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12(\n" +
-	"\x10server_time_unix\x18\x03 \x01(\x03R\x0eserverTimeUnix\"x\n" +
+	"\x10server_time_unix\x18\x03 \x01(\x03R\x0eserverTimeUnix\"\x9f\x01\n" +
 	"\x0fRegisterRequest\x12*\n" +
 	"\x04node\x18\x01 \x01(\v2\x16.jcmanager.v1.NodeInfoR\x04node\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\x12#\n" +
-	"\rsession_token\x18\x03 \x01(\tR\fsessionToken\"\xa1\x01\n" +
+	"\rsession_token\x18\x03 \x01(\tR\fsessionToken\x12%\n" +
+	"\x0einstall_secret\x18\x04 \x01(\tR\rinstallSecret\"\xa1\x01\n" +
 	"\x10RegisterResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12,\n" +

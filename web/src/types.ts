@@ -10,6 +10,7 @@ export interface NodeSummaryResponse {
   id: string
   hostname: string
   display_name: string
+  status: string
   primary_ip: string
   os: string
   arch: string
@@ -42,6 +43,7 @@ export interface NodeConfigResponse {
   id: string
   hostname: string
   display_name: string
+  status: string
   primary_ip: string
   os: string
   arch: string
@@ -72,6 +74,27 @@ export interface ConfigPushRequest {
   service_name: string
   create_backup: boolean
   restart_after_write: boolean
+}
+
+export interface CreateNodeRequest {
+  display_name: string
+}
+
+export interface CreateNodeResponse {
+  id: string
+  display_name: string
+  install_secret: string
+  install_command: string
+  status: string
+  expires_at: string
+}
+
+export interface ClaimNodeRequest {
+  display_name?: string
+}
+
+export interface InstallCommandResponse {
+  install_command: string
 }
 
 export interface BatchConfigRequest extends ConfigPushRequest {
