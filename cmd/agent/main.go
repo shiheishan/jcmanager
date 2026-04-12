@@ -65,12 +65,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(ctx, *configPath, cfg); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("agent exited with error: %v", err)
 	}
 }
 
-func run(ctx context.Context, cfg *agentcfg.RuntimeConfig) error {
+func run(ctx context.Context, configPath string, cfg *agentcfg.RuntimeConfig) error {
 	conn, err := dialServer(ctx, cfg)
 	if err != nil {
 		return err
@@ -85,8 +85,8 @@ func run(ctx context.Context, cfg *agentcfg.RuntimeConfig) error {
 	}
 
 	for {
-		nodeInfo, _ := buildNodeInfo(cfg, state.NodeID)
-		registeredState, err := registerUntilSuccess(ctx, client, cfg, nodeInfo, state.SessionToken)
+		nodeInfo, _ := buildNodeInfo(cfg, registrationNodeID(cfg, state))
+		registeredState, err := registerUntilSuccess(ctx, client, cfg, configPath, nodeInfo, state.SessionToken)
 		if err != nil {
 			return err
 		}
@@ -153,16 +153,18 @@ func transportCredentials(cfg *agentcfg.RuntimeConfig) credentials.TransportCred
 	})
 }
 
-func registerUntilSuccess(ctx context.Context, client jcmanagerpb.AgentServiceClient, cfg *agentcfg.RuntimeConfig, nodeInfo *jcmanagerpb.NodeInfo, sessionToken string) (agentState, error) {
+func registerUntilSuccess(ctx context.Context, client jcmanagerpb.AgentServiceClient, cfg *agentcfg.RuntimeConfig, configPath string, nodeInfo *jcmanagerpb.NodeInfo, sessionToken string) (agentState, error) {
 	nodeID := strings.TrimSpace(nodeInfo.GetNodeId())
 	sessionToken = strings.TrimSpace(sessionToken)
+	installSecret := strings.TrimSpace(cfg.InstallSecret)
 
 	for {
 		rpcCtx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
 		resp, err := client.Register(rpcCtx, &jcmanagerpb.RegisterRequest{
-			Node:         nodeInfo,
-			Token:        cfg.Server.Token,
-			SessionToken: sessionToken,
+			Node:          nodeInfo,
+			Token:         cfg.Server.Token,
+			SessionToken:  sessionToken,
+			InstallSecret: installSecret,
 		})
 		cancel()
 		if err == nil {
@@ -184,6 +186,17 @@ func registerUntilSuccess(ctx context.Context, client jcmanagerpb.AgentServiceCl
 				if err := persistAgentState(agentIDPath, state); err != nil {
 					return agentState{}, fmt.Errorf("persist agent state: %w", err)
 				}
+				if installSecret != "" {
+					cfg.NodeID = nodeID
+					cfg.InstallSecret = ""
+					if strings.TrimSpace(cfg.DisplayName) == "" && strings.TrimSpace(resp.GetDisplayName()) != "" {
+						cfg.DisplayName = strings.TrimSpace(resp.GetDisplayName())
+					}
+					if err := agentcfg.WriteRuntimeConfigFile(configPath, cfg); err != nil {
+						return agentState{}, fmt.Errorf("persist runtime config: %w", err)
+					}
+					installSecret = ""
+				}
 				return state, nil
 			}
 		}
@@ -192,7 +205,7 @@ func registerUntilSuccess(ctx context.Context, client jcmanagerpb.AgentServiceCl
 			log.Printf("persisted session rejected, requesting fresh registration")
 			nodeID = ""
 			sessionToken = ""
-			nodeInfo.NodeId = ""
+			nodeInfo.NodeId = registrationNodeID(cfg, agentState{})
 			if err := clearAgentState(agentIDPath); err != nil {
 				log.Printf("clear agent state: %v", err)
 			}
@@ -399,6 +412,16 @@ func buildNodeInfo(cfg *agentcfg.RuntimeConfig, nodeID string) (*jcmanagerpb.Nod
 		ServiceFlavors: snapshot.flavors,
 		AllowedPaths:   snapshot.allowedPath,
 	}, snapshot
+}
+
+func registrationNodeID(cfg *agentcfg.RuntimeConfig, state agentState) string {
+	if strings.TrimSpace(state.NodeID) != "" {
+		return strings.TrimSpace(state.NodeID)
+	}
+	if strings.TrimSpace(cfg.InstallSecret) != "" {
+		return strings.TrimSpace(cfg.NodeID)
+	}
+	return ""
 }
 
 func shouldReRegister(err error) bool {

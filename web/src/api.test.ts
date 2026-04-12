@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { parseEventChunk, pushBatchConfig, streamTaskEvents, type ApiClientConfig } from './api'
+import {
+  claimNode,
+  createNode,
+  getInstallCommand,
+  parseEventChunk,
+  pushBatchConfig,
+  streamTaskEvents,
+  type ApiClientConfig
+} from './api'
 
 const apiConfig: ApiClientConfig = {
   baseUrl: 'http://127.0.0.1:8080',
@@ -104,6 +112,94 @@ describe('pushBatchConfig', () => {
         canary_mode: true
       })
     )
+  })
+})
+
+describe('createNode', () => {
+  it('posts the display name to the create endpoint', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: 'node-1',
+          display_name: 'HK-01',
+          install_secret: 'secret',
+          install_command: 'curl -fsSL http://127.0.0.1:8080/install.sh?secret=secret | bash',
+          status: 'pending_install',
+          expires_at: '2026-04-18T10:00:00Z'
+        }),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createNode(apiConfig, {
+      display_name: 'HK-01'
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit] | undefined
+    if (!call) {
+      throw new Error('fetch was not called')
+    }
+    const url = call[0]
+    const init = call[1]
+    expect(url).toBe('http://127.0.0.1:8080/api/nodes/create')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ display_name: 'HK-01' }))
+  })
+})
+
+describe('claimNode', () => {
+  it('posts to the claim endpoint', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: 'node-1', status: 'active' }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await claimNode(apiConfig, 'node-1', {
+      display_name: 'HK-01'
+    })
+
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit] | undefined
+    if (!call) {
+      throw new Error('fetch was not called')
+    }
+    expect(call[0]).toBe('http://127.0.0.1:8080/api/nodes/node-1/claim')
+    expect(call[1].method).toBe('POST')
+    expect(call[1].body).toBe(JSON.stringify({ display_name: 'HK-01' }))
+  })
+})
+
+describe('getInstallCommand', () => {
+  it('loads the authenticated universal install command', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ install_command: 'curl -fsSL https://panel/install.sh | bash -s -- --token secret' }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await getInstallCommand(apiConfig)
+
+    expect(response.install_command).toContain('/install.sh')
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit] | undefined
+    if (!call) {
+      throw new Error('fetch was not called')
+    }
+    expect(call[0]).toBe('http://127.0.0.1:8080/api/install-command')
   })
 })
 

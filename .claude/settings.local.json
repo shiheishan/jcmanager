@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(find /Users/mima4ge1/coding/projects/jcmanager -maxdepth 2 -type f \\\\\\(-name Makefile -o -name *.sh -o -name build* \\\\\\))",
+      "Bash(find /Users/mima4ge1/coding/projects/jcmanager -type f \\\\\\(-name *.proto -o -name *.service -o -name install* -o -name *.sh \\\\\\))",
+      "Bash(grep -r \"systemd\\\\|service\\\\|install\" /Users/mima4ge1/coding/projects/jcmanager --include=*.go --include=*.md --include=*.sh --include=*.yaml)",
+      "Bash(find /Users/mima4ge1/coding/projects/jcmanager -maxdepth 2 -type f -name README* -o -name INSTALL* -o -name *.md)",
+      "Bash(chmod:*)",
+      "Bash(go build:*)",
+      "WebSearch",
+      "WebFetch(domain:nezha.wiki)"
     ]
   }
 }

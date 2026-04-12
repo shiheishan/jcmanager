@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -37,29 +38,36 @@ import (
 )
 
 const (
-	defaultGRPCAddr        = ":50051"
-	defaultHTTPAddr        = ":8080"
-	defaultDatabasePath    = "jcmanager.db"
-	defaultShutdownTimeout = 10 * time.Second
+	defaultGRPCAddr         = ":50051"
+	defaultHTTPAddr         = ":8080"
+	defaultDatabasePath     = "jcmanager.db"
+	defaultShutdownTimeout  = 10 * time.Second
+	pendingInstallSecretTTL = 7 * 24 * time.Hour
+
+	nodeStatusPendingInstall = "pending_install"
+	nodeStatusUnclaimed      = "unclaimed"
+	nodeStatusActive         = "active"
 )
 
 type config struct {
-	GRPCAddr string
-	HTTPAddr string
-	DBPath   string
-	Token    string
-	APIToken string
+	GRPCAddr    string `yaml:"grpc_addr"`
+	HTTPAddr    string `yaml:"http_addr"`
+	DBPath      string `yaml:"db_path"`
+	Token       string `yaml:"token"`
+	APIToken    string `yaml:"api_token"`
+	ExternalURL string `yaml:"external_url"`
 }
 
 type server struct {
 	jcmanagerpb.UnimplementedAgentServiceServer
 
-	db         *gorm.DB
-	token      string
-	apiToken   string
-	dispatcher *commandDispatcher
-	tasks      *taskStore
-	waiters    *commandResultWaiters
+	db            *gorm.DB
+	token         string
+	apiToken      string
+	installConfig config
+	dispatcher    *commandDispatcher
+	tasks         *taskStore
+	waiters       *commandResultWaiters
 }
 
 type commandResultWaiters struct {
@@ -68,34 +76,37 @@ type commandResultWaiters struct {
 }
 
 type nodeRecord struct {
-	ID                 string    `gorm:"primaryKey;size:64"`
-	Hostname           string    `gorm:"not null;default:''"`
-	DisplayName        string    `gorm:"not null;default:''"`
-	PrimaryIP          string    `gorm:"not null;default:''"`
-	OS                 string    `gorm:"column:os;not null;default:''"`
-	Arch               string    `gorm:"not null;default:''"`
-	Kernel             string    `gorm:"not null;default:''"`
-	AgentVersion       string    `gorm:"not null;default:''"`
-	SessionTokenHash   []byte    `gorm:"column:session_token_hash;not null;default:''"`
-	ServiceFlavorsJSON []byte    `gorm:"column:service_flavors_json;not null;default:''"`
-	AllowedPathsJSON   []byte    `gorm:"column:allowed_paths_json;not null;default:''"`
-	ServicesJSON       []byte    `gorm:"column:services_json;not null;default:''"`
-	RegisteredAt       time.Time `gorm:"not null"`
-	LastRegisterAt     time.Time `gorm:"not null"`
-	LastHeartbeatAt    *time.Time
-	LastAgentTimeUnix  int64 `gorm:"not null;default:0"`
-	Online             bool  `gorm:"not null;default:false"`
-	CPUPercent         float64
-	MemoryUsedBytes    uint64  `gorm:"not null;default:0"`
-	MemoryTotalBytes   uint64  `gorm:"not null;default:0"`
-	DiskUsedBytes      uint64  `gorm:"not null;default:0"`
-	DiskTotalBytes     uint64  `gorm:"not null;default:0"`
-	Load1              float64 `gorm:"column:load_1"`
-	Load5              float64 `gorm:"column:load_5"`
-	Load15             float64 `gorm:"column:load_15"`
-	ConfigError        string  `gorm:"not null;default:''"`
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                     string     `gorm:"primaryKey;size:64"`
+	Hostname               string     `gorm:"not null;default:''"`
+	DisplayName            string     `gorm:"not null;default:''"`
+	PrimaryIP              string     `gorm:"not null;default:''"`
+	OS                     string     `gorm:"column:os;not null;default:''"`
+	Arch                   string     `gorm:"not null;default:''"`
+	Kernel                 string     `gorm:"not null;default:''"`
+	AgentVersion           string     `gorm:"not null;default:''"`
+	SessionTokenHash       []byte     `gorm:"column:session_token_hash;not null;default:''"`
+	InstallSecretHash      []byte     `gorm:"column:install_secret_hash"`
+	Status                 string     `gorm:"not null;default:'active';index"`
+	InstallSecretExpiresAt *time.Time `gorm:"column:install_secret_expires_at"`
+	ServiceFlavorsJSON     []byte     `gorm:"column:service_flavors_json;not null;default:''"`
+	AllowedPathsJSON       []byte     `gorm:"column:allowed_paths_json;not null;default:''"`
+	ServicesJSON           []byte     `gorm:"column:services_json;not null;default:''"`
+	RegisteredAt           time.Time  `gorm:"not null"`
+	LastRegisterAt         time.Time  `gorm:"not null"`
+	LastHeartbeatAt        *time.Time
+	LastAgentTimeUnix      int64 `gorm:"not null;default:0"`
+	Online                 bool  `gorm:"not null;default:false"`
+	CPUPercent             float64
+	MemoryUsedBytes        uint64  `gorm:"not null;default:0"`
+	MemoryTotalBytes       uint64  `gorm:"not null;default:0"`
+	DiskUsedBytes          uint64  `gorm:"not null;default:0"`
+	DiskTotalBytes         uint64  `gorm:"not null;default:0"`
+	Load1                  float64 `gorm:"column:load_1"`
+	Load5                  float64 `gorm:"column:load_5"`
+	Load15                 float64 `gorm:"column:load_15"`
+	ConfigError            string  `gorm:"not null;default:''"`
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 type commandResultRecord struct {
@@ -120,6 +131,7 @@ type nodeSummaryResponse struct {
 	ID                string              `json:"id"`
 	Hostname          string              `json:"hostname"`
 	DisplayName       string              `json:"display_name"`
+	Status            string              `json:"status"`
 	PrimaryIP         string              `json:"primary_ip"`
 	OS                string              `json:"os"`
 	Arch              string              `json:"arch"`
@@ -153,6 +165,7 @@ type nodeConfigResponse struct {
 	ID             string    `json:"id"`
 	Hostname       string    `json:"hostname"`
 	DisplayName    string    `json:"display_name"`
+	Status         string    `json:"status"`
 	PrimaryIP      string    `json:"primary_ip"`
 	OS             string    `json:"os"`
 	Arch           string    `json:"arch"`
@@ -177,6 +190,27 @@ type nodeConfigContentResponse struct {
 	FetchedAt         time.Time `json:"fetched_at"`
 }
 
+type createNodeRequest struct {
+	DisplayName string `json:"display_name"`
+}
+
+type createNodeResponse struct {
+	ID             string    `json:"id"`
+	DisplayName    string    `json:"display_name"`
+	InstallSecret  string    `json:"install_secret"`
+	InstallCommand string    `json:"install_command"`
+	Status         string    `json:"status"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
+type claimNodeRequest struct {
+	DisplayName string `json:"display_name"`
+}
+
+type installCommandResponse struct {
+	InstallCommand string `json:"install_command"`
+}
+
 type apiServiceStatus struct {
 	Name       string `json:"name"`
 	Active     bool   `json:"active"`
@@ -187,15 +221,26 @@ type apiServiceStatus struct {
 
 func main() {
 	cfg := config{}
+	configPath := flag.String("config", "", "path to a YAML config file")
 	flag.StringVar(&cfg.GRPCAddr, "grpc-addr", defaultGRPCAddr, "address for the gRPC agent server")
 	flag.StringVar(&cfg.HTTPAddr, "http-addr", defaultHTTPAddr, "address for the REST API server")
 	flag.StringVar(&cfg.DBPath, "db-path", defaultDatabasePath, "path to the SQLite database")
 	flag.StringVar(&cfg.Token, "token", "", "shared registration token required from agents")
 	flag.StringVar(&cfg.APIToken, "api-token", "", "bearer token required for REST API access")
+	flag.StringVar(&cfg.ExternalURL, "external-url", "", "public HTTP base URL used in generated install commands")
 	flag.Parse()
+
+	if strings.TrimSpace(*configPath) != "" {
+		fileCfg, err := loadServerConfigFile(*configPath)
+		if err != nil {
+			log.Fatalf("load config file: %v", err)
+		}
+		mergeServerConfig(&cfg, fileCfg)
+	}
 
 	cfg.Token = strings.TrimSpace(firstNonEmpty(cfg.Token, os.Getenv("JCMANAGER_AGENT_TOKEN")))
 	cfg.APIToken = strings.TrimSpace(firstNonEmpty(cfg.APIToken, os.Getenv("JCMANAGER_API_TOKEN")))
+	cfg.ExternalURL = strings.TrimSpace(firstNonEmpty(cfg.ExternalURL, os.Getenv("JCMANAGER_EXTERNAL_URL")))
 	if cfg.Token == "" {
 		log.Fatalf("agent registration token is required, set -token or JCMANAGER_AGENT_TOKEN")
 	}
@@ -210,6 +255,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("init server: %v", err)
 	}
+	srv.installConfig = cfg
 
 	grpcListener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -222,6 +268,7 @@ func main() {
 
 	router := gin.New()
 	router.Use(gin.Recovery())
+	srv.registerInstallRoutes(router, cfg)
 	srv.registerFrontendRoutes(router)
 
 	api := router.Group("/api")
@@ -341,13 +388,19 @@ func openDatabase(dbPath string) (*gorm.DB, error) {
 	if err := db.AutoMigrate(&nodeRecord{}, &commandResultRecord{}); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
+	if err := backfillNodeRecordDefaults(db); err != nil {
+		return nil, fmt.Errorf("backfill node defaults: %w", err)
+	}
 
 	return db, nil
 }
 
 func (s *server) Register(ctx context.Context, req *jcmanagerpb.RegisterRequest) (*jcmanagerpb.RegisterResponse, error) {
-	if err := s.checkToken(req.GetToken()); err != nil {
-		return nil, err
+	installSecret := strings.TrimSpace(req.GetInstallSecret())
+	if installSecret == "" {
+		if err := s.checkToken(req.GetToken()); err != nil {
+			return nil, err
+		}
 	}
 
 	node := req.GetNode()
@@ -367,31 +420,55 @@ func (s *server) Register(ctx context.Context, req *jcmanagerpb.RegisterRequest)
 	}
 
 	now := time.Now().UTC()
-	displayName := strings.TrimSpace(node.GetDisplayName())
-	if displayName == "" {
-		displayName = strings.TrimSpace(node.GetHostname())
-	}
-	if displayName == "" {
-		displayName = nodeID
-	}
-
 	var record nodeRecord
+	displayName := strings.TrimSpace(node.GetDisplayName())
 	sessionToken := strings.TrimSpace(req.GetSessionToken())
-	isNewNode := true
-	if nodeID != "" {
+	isNewNode := false
+
+	switch {
+	case installSecret != "":
+		record, err = s.loadPendingNodeByInstallSecret(ctx, installSecret, now)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, status.Error(codes.PermissionDenied, "invalid install secret")
+			}
+			return nil, status.Errorf(codes.Internal, "load pending node: %v", err)
+		}
+		if nodeID != "" && nodeID != record.ID {
+			return nil, status.Error(codes.PermissionDenied, "install secret does not match requested node")
+		}
+		nodeID = record.ID
+		sessionToken, err = generateSessionToken()
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "generate session token: %v", err)
+		}
+		record.SessionTokenHash = hashToken(sessionToken)
+		record.Status = nodeStatusActive
+		record.InstallSecretHash = nil
+		record.InstallSecretExpiresAt = nil
+		if strings.TrimSpace(record.DisplayName) != "" {
+			displayName = strings.TrimSpace(record.DisplayName)
+		}
+	case nodeID != "":
 		err = s.db.WithContext(ctx).First(&record, "id = ?", nodeID).Error
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, status.Errorf(codes.Internal, "load node: %v", err)
 		}
 		if err == nil {
-			isNewNode = false
 			if err := validateSessionToken(record.SessionTokenHash, sessionToken); err != nil {
 				return nil, err
 			}
+			if displayName == "" {
+				displayName = strings.TrimSpace(record.DisplayName)
+			}
+			break
 		}
-	}
-
-	if isNewNode {
+		isNewNode = true
+		fallthrough
+	default:
+		if !isNewNode {
+			isNewNode = true
+		}
 		nodeID, err = generateNodeID()
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "generate node id: %v", err)
@@ -402,6 +479,7 @@ func (s *server) Register(ctx context.Context, req *jcmanagerpb.RegisterRequest)
 		}
 		record = nodeRecord{
 			ID:                 nodeID,
+			Status:             nodeStatusUnclaimed,
 			RegisteredAt:       now,
 			SessionTokenHash:   hashToken(sessionToken),
 			ServiceFlavorsJSON: serviceFlavorsJSON,
@@ -411,9 +489,13 @@ func (s *server) Register(ctx context.Context, req *jcmanagerpb.RegisterRequest)
 	}
 
 	if displayName == "" {
+		displayName = strings.TrimSpace(node.GetHostname())
+	}
+	if displayName == "" {
 		displayName = nodeID
 	}
 
+	record.ID = nodeID
 	record.Hostname = strings.TrimSpace(node.GetHostname())
 	record.DisplayName = displayName
 	record.PrimaryIP = strings.TrimSpace(node.GetPrimaryIp())
@@ -423,6 +505,13 @@ func (s *server) Register(ctx context.Context, req *jcmanagerpb.RegisterRequest)
 	record.AgentVersion = strings.TrimSpace(node.GetAgentVersion())
 	record.ServiceFlavorsJSON = serviceFlavorsJSON
 	record.AllowedPathsJSON = allowedPathsJSON
+	record.Status = normalizedNodeStatus(record.Status)
+	if installSecret == "" && isNewNode && record.Status == nodeStatusActive {
+		record.Status = nodeStatusUnclaimed
+	}
+	if record.RegisteredAt.IsZero() {
+		record.RegisteredAt = now
+	}
 	record.LastRegisterAt = now
 
 	if err := s.db.WithContext(ctx).Save(&record).Error; err != nil {
@@ -573,7 +662,10 @@ func (s *server) ReportResult(ctx context.Context, req *jcmanagerpb.ReportResult
 
 func (s *server) registerRoutes(routes gin.IRoutes) {
 	routes.GET("/events", s.handleEvents)
+	routes.GET("/install-command", s.handleGetInstallCommand)
 	routes.GET("/nodes", s.handleListNodes)
+	routes.POST("/nodes/create", s.handleCreateNode)
+	routes.POST("/nodes/:id/claim", s.handleClaimNode)
 	routes.GET("/nodes/:id", s.handleGetNode)
 	routes.GET("/nodes/:id/config", s.handleGetNodeConfig)
 	routes.GET("/nodes/:id/config/content", s.handleGetNodeConfigContent)
@@ -649,6 +741,118 @@ func (s *server) handleListNodes(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (s *server) handleCreateNode(c *gin.Context) {
+	var req createNodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "display_name is required"})
+		return
+	}
+
+	nodeID, err := generateNodeID()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("generate node id: %v", err)})
+		return
+	}
+	installSecret, err := generateInstallSecret()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("generate install secret: %v", err)})
+		return
+	}
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(pendingInstallSecretTTL)
+	record := nodeRecord{
+		ID:                     nodeID,
+		DisplayName:            displayName,
+		InstallSecretHash:      hashToken(installSecret),
+		Status:                 nodeStatusPendingInstall,
+		InstallSecretExpiresAt: &expiresAt,
+		RegisteredAt:           now,
+		LastRegisterAt:         now,
+		ServiceFlavorsJSON:     []byte("[]"),
+		AllowedPathsJSON:       []byte("[]"),
+		ServicesJSON:           []byte("[]"),
+	}
+	if err := s.db.WithContext(c.Request.Context()).Create(&record).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("create node: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, createNodeResponse{
+		ID:             record.ID,
+		DisplayName:    record.DisplayName,
+		InstallSecret:  installSecret,
+		InstallCommand: buildInstallCommand(c.Request, s.installConfig, installSecret, ""),
+		Status:         normalizedNodeStatus(record.Status),
+		ExpiresAt:      expiresAt,
+	})
+}
+
+func (s *server) handleGetInstallCommand(c *gin.Context) {
+	c.JSON(http.StatusOK, installCommandResponse{
+		InstallCommand: buildInstallCommand(c.Request, s.installConfig, "", s.token),
+	})
+}
+
+func (s *server) handleClaimNode(c *gin.Context) {
+	record, ok := s.lookupNodeForHTTP(c)
+	if !ok {
+		return
+	}
+	if normalizedNodeStatus(record.Status) != nodeStatusUnclaimed {
+		c.JSON(http.StatusConflict, gin.H{"error": "node is not awaiting claim"})
+		return
+	}
+
+	var req claimNodeRequest
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(record.DisplayName)
+	}
+	if displayName == "" {
+		displayName = strings.TrimSpace(record.Hostname)
+	}
+	if displayName == "" {
+		displayName = record.ID
+	}
+
+	if err := s.db.WithContext(c.Request.Context()).
+		Model(&nodeRecord{}).
+		Where("id = ? AND status = ?", record.ID, nodeStatusUnclaimed).
+		Updates(map[string]any{
+			"status":       nodeStatusActive,
+			"display_name": displayName,
+		}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	updated, err := s.loadNodeRecord(c.Request.Context(), record.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	summary, err := buildNodeSummary(updated)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
 func (s *server) handleGetNode(c *gin.Context) {
 	record, ok := s.lookupNodeForHTTP(c)
 	if !ok {
@@ -690,6 +894,7 @@ func (s *server) handleGetNodeConfig(c *gin.Context) {
 		ID:             record.ID,
 		Hostname:       record.Hostname,
 		DisplayName:    record.DisplayName,
+		Status:         normalizedNodeStatus(record.Status),
 		PrimaryIP:      record.PrimaryIP,
 		OS:             record.OS,
 		Arch:           record.Arch,
@@ -789,6 +994,14 @@ func (s *server) loadNodeRecord(ctx context.Context, nodeID string) (nodeRecord,
 	return record, err
 }
 
+func (s *server) loadPendingNodeByInstallSecret(ctx context.Context, installSecret string, now time.Time) (nodeRecord, error) {
+	var record nodeRecord
+	err := s.db.WithContext(ctx).
+		Where("install_secret_hash = ? AND status = ? AND (install_secret_expires_at IS NULL OR install_secret_expires_at > ?)", hashToken(installSecret), nodeStatusPendingInstall, now).
+		First(&record).Error
+	return record, err
+}
+
 func (s *server) checkToken(token string) error {
 	if s.token == "" {
 		return nil
@@ -813,6 +1026,7 @@ func buildNodeSummary(record nodeRecord) (nodeSummaryResponse, error) {
 		ID:                record.ID,
 		Hostname:          record.Hostname,
 		DisplayName:       record.DisplayName,
+		Status:            normalizedNodeStatus(record.Status),
 		PrimaryIP:         record.PrimaryIP,
 		OS:                record.OS,
 		Arch:              record.Arch,
@@ -1168,11 +1382,30 @@ func generateSessionToken() (string, error) {
 	return hex.EncodeToString(buf[:]), nil
 }
 
+func generateInstallSecret() (string, error) {
+	return generateSessionToken()
+}
+
 func hashToken(token string) []byte {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
 	hashed := make([]byte, len(sum))
 	copy(hashed, sum[:])
 	return hashed
+}
+
+func backfillNodeRecordDefaults(db *gorm.DB) error {
+	return db.Model(&nodeRecord{}).
+		Where("status IS NULL OR TRIM(status) = ''").
+		Update("status", nodeStatusActive).Error
+}
+
+func normalizedNodeStatus(value string) string {
+	switch strings.TrimSpace(value) {
+	case nodeStatusPendingInstall, nodeStatusUnclaimed, nodeStatusActive:
+		return strings.TrimSpace(value)
+	default:
+		return nodeStatusActive
+	}
 }
 
 func validateSessionToken(expectedHash []byte, token string) error {
@@ -1213,10 +1446,241 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func loadServerConfigFile(path string) (config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return config{}, fmt.Errorf("read config file %q: %w", path, err)
+	}
+
+	var cfg config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return config{}, fmt.Errorf("parse config file %q: %w", path, err)
+	}
+
+	cfg.GRPCAddr = strings.TrimSpace(cfg.GRPCAddr)
+	cfg.HTTPAddr = strings.TrimSpace(cfg.HTTPAddr)
+	cfg.DBPath = strings.TrimSpace(cfg.DBPath)
+	cfg.Token = strings.TrimSpace(cfg.Token)
+	cfg.APIToken = strings.TrimSpace(cfg.APIToken)
+	cfg.ExternalURL = strings.TrimSpace(cfg.ExternalURL)
+	return cfg, nil
+}
+
+func mergeServerConfig(dst *config, src config) {
+	if dst == nil {
+		return
+	}
+
+	if (dst.GRPCAddr == "" || dst.GRPCAddr == defaultGRPCAddr) && src.GRPCAddr != "" {
+		dst.GRPCAddr = src.GRPCAddr
+	}
+	if (dst.HTTPAddr == "" || dst.HTTPAddr == defaultHTTPAddr) && src.HTTPAddr != "" {
+		dst.HTTPAddr = src.HTTPAddr
+	}
+	if (dst.DBPath == "" || dst.DBPath == defaultDatabasePath) && src.DBPath != "" {
+		dst.DBPath = src.DBPath
+	}
+	if dst.Token == "" && src.Token != "" {
+		dst.Token = src.Token
+	}
+	if dst.APIToken == "" && src.APIToken != "" {
+		dst.APIToken = src.APIToken
+	}
+	if dst.ExternalURL == "" && src.ExternalURL != "" {
+		dst.ExternalURL = src.ExternalURL
+	}
+}
+
 func ackf(message string) *jcmanagerpb.Ack {
 	return &jcmanagerpb.Ack{
 		Ok:             true,
 		Message:        message,
 		ServerTimeUnix: time.Now().Unix(),
 	}
+}
+
+// ── install & download routes (unauthenticated) ─────────
+
+func (s *server) registerInstallRoutes(router *gin.Engine, cfg config) {
+	router.GET("/install.sh", s.handleInstallScript(cfg))
+	router.GET("/download/agent", s.handleDownloadAgent())
+}
+
+func (s *server) handleInstallScript(cfg config) gin.HandlerFunc {
+	// Read the install script template once at startup.
+	scriptTemplate := loadInstallScriptTemplate()
+
+	return func(c *gin.Context) {
+		script := scriptTemplate
+		secret := strings.TrimSpace(c.Query("secret"))
+		displayName := ""
+		nodeID := ""
+		installSecret := ""
+		if secret != "" {
+			record, err := s.loadPendingNodeByInstallSecret(c.Request.Context(), secret, time.Now().UTC())
+			if err != nil {
+				c.Data(http.StatusBadRequest, "text/plain; charset=utf-8", []byte(invalidInstallScript(err)))
+				return
+			}
+			nodeID = record.ID
+			displayName = strings.TrimSpace(record.DisplayName)
+			installSecret = secret
+		}
+
+		script = strings.ReplaceAll(script, "__SERVER_GRPC__", serverGRPCAddress(c.Request, cfg))
+		script = strings.ReplaceAll(script, "__SERVER_HTTP__", serverHTTPBase(c.Request, cfg))
+		script = strings.ReplaceAll(script, "__AGENT_TOKEN__", "")
+		script = strings.ReplaceAll(script, "__NODE_ID__", nodeID)
+		script = strings.ReplaceAll(script, "__DISPLAY_NAME__", shellEscapeSingleLine(displayName))
+		script = strings.ReplaceAll(script, "__INSTALL_SECRET__", installSecret)
+
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(script))
+	}
+}
+
+func (s *server) handleDownloadAgent() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := strings.TrimSpace(c.Query("token"))
+		secret := strings.TrimSpace(c.Query("secret"))
+		switch {
+		case secret != "":
+			if _, err := s.loadPendingNodeByInstallSecret(c.Request.Context(), secret, time.Now().UTC()); err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid install secret"})
+				return
+			}
+		case subtle.ConstantTimeCompare([]byte(token), []byte(s.token)) != 1:
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			return
+		}
+
+		arch := c.DefaultQuery("arch", "amd64")
+		if arch != "amd64" && arch != "arm64" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported arch, use amd64 or arm64"})
+			return
+		}
+
+		binaryPath := agentBinaryPath(arch)
+		if _, err := os.Stat(binaryPath); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": fmt.Sprintf("agent binary not found for %s. Run: make build-agent-linux", arch),
+			})
+			return
+		}
+
+		c.FileAttachment(binaryPath, fmt.Sprintf("jcmanager-agent-linux-%s", arch))
+	}
+}
+
+func buildInstallCommand(req *http.Request, cfg config, installSecret, agentToken string) string {
+	base := serverHTTPBase(req, cfg)
+	args := make([]string, 0, 2)
+	if strings.TrimSpace(agentToken) != "" {
+		args = append(args, "--token", shellQuoteArg(agentToken))
+	}
+
+	scriptURL := fmt.Sprintf("%s/install.sh", base)
+	if strings.TrimSpace(installSecret) != "" {
+		scriptURL += "?secret=" + url.QueryEscape(strings.TrimSpace(installSecret))
+	}
+	if len(args) == 0 {
+		return fmt.Sprintf("curl -fsSL %s | bash", scriptURL)
+	}
+	return fmt.Sprintf("curl -fsSL %s | bash -s -- %s", scriptURL, strings.Join(args, " "))
+}
+
+func serverHTTPBase(req *http.Request, cfg config) string {
+	if external := strings.TrimRight(strings.TrimSpace(cfg.ExternalURL), "/"); external != "" {
+		return external
+	}
+
+	host := strings.TrimSpace(firstNonEmpty(req.Header.Get("X-Forwarded-Host"), req.Host))
+	if strings.Contains(host, ",") {
+		host = strings.TrimSpace(strings.Split(host, ",")[0])
+	}
+	if host == "" {
+		host = "localhost" + cfg.HTTPAddr
+	}
+	scheme := "http"
+	if proto := strings.TrimSpace(req.Header.Get("X-Forwarded-Proto")); proto != "" {
+		scheme = strings.TrimSpace(strings.Split(proto, ",")[0])
+	} else if req.TLS != nil {
+		scheme = "https"
+	}
+	return strings.TrimRight(scheme+"://"+host, "/")
+}
+
+func serverGRPCAddress(req *http.Request, cfg config) string {
+	httpBase := serverHTTPBase(req, cfg)
+	host := strings.TrimPrefix(strings.TrimPrefix(httpBase, "http://"), "https://")
+	host = strings.TrimSpace(host)
+	if idx := strings.Index(host, "/"); idx >= 0 {
+		host = host[:idx]
+	}
+	if cfg.GRPCAddr == "" {
+		return host
+	}
+	if strings.HasPrefix(cfg.GRPCAddr, ":") {
+		hostOnly := host
+		if strings.HasPrefix(hostOnly, "[") {
+			if idx := strings.LastIndex(hostOnly, "]"); idx >= 0 {
+				hostOnly = hostOnly[:idx+1]
+			}
+		} else if idx := strings.LastIndex(hostOnly, ":"); idx >= 0 {
+			hostOnly = hostOnly[:idx]
+		}
+		return hostOnly + cfg.GRPCAddr
+	}
+	return cfg.GRPCAddr
+}
+
+func invalidInstallScript(err error) string {
+	message := "invalid or expired install secret"
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		message = err.Error()
+	}
+	return fmt.Sprintf("#!/bin/bash\nset -e\nprintf '%%s\\n' %q\nexit 1\n", message)
+}
+
+func shellEscapeSingleLine(value string) string {
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "\"", "\\\"")
+	value = strings.ReplaceAll(value, "`", "\\`")
+	value = strings.ReplaceAll(value, "$", "\\$")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
+}
+
+func shellQuoteArg(value string) string {
+	value = strings.ReplaceAll(value, `'`, `'"'"'`)
+	return "'" + value + "'"
+}
+
+func agentBinaryPath(arch string) string {
+	name := fmt.Sprintf("jcmanager-agent-linux-%s", arch)
+	// Check ./agents/ directory first (standard location).
+	candidates := []string{
+		filepath.Join("agents", name),
+		filepath.Join("..", "..", "agents", name),
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return filepath.Join("agents", name)
+}
+
+func loadInstallScriptTemplate() string {
+	candidates := []string{
+		filepath.Join("scripts", "install.sh"),
+		filepath.Join("..", "..", "scripts", "install.sh"),
+	}
+	for _, candidate := range candidates {
+		data, err := os.ReadFile(candidate)
+		if err == nil {
+			return string(data)
+		}
+	}
+	log.Printf("WARNING: scripts/install.sh not found, /install.sh endpoint will return empty script")
+	return "#!/bin/bash\necho 'ERROR: install script template not found on server'\nexit 1\n"
 }

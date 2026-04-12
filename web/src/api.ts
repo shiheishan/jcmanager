@@ -1,7 +1,11 @@
 import type {
   BatchConfigRequest,
+  ClaimNodeRequest,
   ConfigPushRequest,
   ConfigTaskResponse,
+  CreateNodeRequest,
+  CreateNodeResponse,
+  InstallCommandResponse,
   NodeConfigContentResponse,
   NodeConfigResponse,
   NodeDetailResponse,
@@ -81,6 +85,31 @@ export function listNodes(config: ApiClientConfig): Promise<NodeSummaryResponse[
 
 export function getNode(config: ApiClientConfig, nodeId: string): Promise<NodeDetailResponse> {
   return requestJson<NodeDetailResponse>(config, `/api/nodes/${encodeURIComponent(nodeId)}`)
+}
+
+export function createNode(
+  config: ApiClientConfig,
+  payload: CreateNodeRequest
+): Promise<CreateNodeResponse> {
+  return requestJson<CreateNodeResponse>(config, '/api/nodes/create', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function claimNode(
+  config: ApiClientConfig,
+  nodeId: string,
+  payload: ClaimNodeRequest = {}
+): Promise<NodeSummaryResponse> {
+  return requestJson<NodeSummaryResponse>(config, `/api/nodes/${encodeURIComponent(nodeId)}/claim`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function getInstallCommand(config: ApiClientConfig): Promise<InstallCommandResponse> {
+  return requestJson<InstallCommandResponse>(config, '/api/install-command')
 }
 
 export function getNodeConfig(config: ApiClientConfig, nodeId: string): Promise<NodeConfigResponse> {

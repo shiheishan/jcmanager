@@ -13,6 +13,7 @@ import {
   NFormItem,
   NGradientText,
   NInput,
+  NModal,
   NProgress,
   NSelect,
   NSpace,
@@ -26,6 +27,9 @@ import {
 } from 'naive-ui'
 import {
   ApiError,
+  claimNode,
+  createNode,
+  getInstallCommand,
   getNode,
   getNodeConfig,
   getNodeConfigContent,
@@ -39,6 +43,8 @@ import { parseStructuredContent, serializeConfigContent } from './config-format'
 import type {
   ConfigPushRequest,
   ConfigTaskResponse,
+  CreateNodeResponse,
+  InstallCommandResponse,
   NodeConfigContentResponse,
   NodeConfigResponse,
   NodeDetailResponse,
@@ -91,6 +97,12 @@ const activeNodeDetail = ref<NodeDetailResponse | null>(null)
 const activeNodeConfig = ref<NodeConfigResponse | null>(null)
 const loadingNodeDetail = ref(false)
 const nodeDetailError = ref('')
+const addNodeModalOpen = ref(false)
+const addNodeDisplayName = ref('')
+const creatingNode = ref(false)
+const createdNode = ref<CreateNodeResponse | null>(null)
+const universalInstallCommand = ref('')
+const loadingInstallCommand = ref(false)
 
 const selectedNodeIds = ref<string[]>([])
 const submitting = ref(false)
@@ -131,6 +143,9 @@ watch(apiBaseUrl, (value) => {
 
 watch(apiToken, (value) => {
   storeValue(storageKeys.apiToken, value, 'session')
+  if (!value.trim()) {
+    universalInstallCommand.value = ''
+  }
 })
 
 const activeNodeSummary = computed(() =>
@@ -139,6 +154,8 @@ const activeNodeSummary = computed(() =>
 
 const selectedCount = computed(() => selectedNodeIds.value.length)
 const connected = computed(() => apiConfig.value.token.length > 0)
+const visibleNodes = computed(() => nodes.value.filter((node) => node.status !== 'unclaimed'))
+const unclaimedNodes = computed(() => nodes.value.filter((node) => node.status === 'unclaimed'))
 
 const nodeCountSummary = computed(() => {
   const total = nodes.value.length
@@ -146,7 +163,8 @@ const nodeCountSummary = computed(() => {
   return {
     total,
     online,
-    offline: total - online
+    offline: total - online,
+    unclaimed: unclaimedNodes.value.length
   }
 })
 
@@ -230,18 +248,36 @@ const nodeColumns = computed<DataTableColumns<NodeSummaryResponse>>(() => [
     title: 'Status',
     key: 'online',
     width: 110,
-    render: (row) =>
-      h(
+    render: (row) => {
+      const statusLabel =
+        row.status === 'pending_install'
+          ? 'Pending'
+          : row.status === 'unclaimed'
+            ? 'Unclaimed'
+            : row.online
+              ? 'Online'
+              : 'Offline'
+      const statusType =
+        row.status === 'pending_install'
+          ? 'warning'
+          : row.status === 'unclaimed'
+            ? 'info'
+            : row.online
+              ? 'success'
+              : 'error'
+
+      return h(
         NTag,
         {
-          type: row.online ? 'success' : 'error',
+          type: statusType,
           round: true,
           bordered: false
         },
         {
-          default: () => (row.online ? 'Online' : 'Offline')
+          default: () => statusLabel
         }
       )
+    }
   },
   {
     title: 'Last Heartbeat',
@@ -344,6 +380,7 @@ async function loadNodes(showToast = false) {
 
   try {
     nodes.value = await listNodes(apiConfig.value)
+    await loadInstallCommand()
     if (showToast) {
       message.success(`Loaded ${nodes.value.length} node${nodes.value.length === 1 ? '' : 's'}.`)
     }
@@ -356,6 +393,84 @@ async function loadNodes(showToast = false) {
     message.error(nodesError.value)
   } finally {
     loadingNodes.value = false
+  }
+}
+
+async function loadInstallCommand() {
+  loadingInstallCommand.value = true
+  try {
+    const response: InstallCommandResponse = await getInstallCommand(apiConfig.value)
+    universalInstallCommand.value = response.install_command
+  } catch (error) {
+    universalInstallCommand.value = ''
+    throw error
+  } finally {
+    loadingInstallCommand.value = false
+  }
+}
+
+function openAddNodeModal() {
+  addNodeDisplayName.value = ''
+  createdNode.value = null
+  addNodeModalOpen.value = true
+}
+
+function closeAddNodeModal() {
+  addNodeModalOpen.value = false
+}
+
+async function submitCreateNode() {
+  if (!connected.value) {
+    message.error('Set an API token before creating nodes.')
+    return
+  }
+  if (!addNodeDisplayName.value.trim()) {
+    message.error('Display name is required.')
+    return
+  }
+
+  creatingNode.value = true
+  try {
+    createdNode.value = await createNode(apiConfig.value, {
+      display_name: addNodeDisplayName.value.trim()
+    })
+    await loadNodes(false)
+    message.success(`Created install command for ${createdNode.value.display_name}.`)
+  } catch (error) {
+    message.error(toErrorMessage(error))
+  } finally {
+    creatingNode.value = false
+  }
+}
+
+async function claimUnclaimedNode(node: NodeSummaryResponse) {
+  if (!connected.value) {
+    message.error('Set an API token before claiming nodes.')
+    return
+  }
+
+  try {
+    const claimed = await claimNode(apiConfig.value, node.id, {
+      display_name: node.display_name || node.hostname || node.id
+    })
+    await loadNodes(false)
+    message.success(`Claimed ${claimed.display_name || claimed.hostname || claimed.id}.`)
+    await openNode(claimed)
+  } catch (error) {
+    message.error(toErrorMessage(error))
+  }
+}
+
+async function copyToClipboard(value: string, successMessage: string) {
+  if (typeof navigator === 'undefined' || !navigator.clipboard) {
+    message.error('Clipboard copy is unavailable in this browser context.')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(value)
+    message.success(successMessage)
+  } catch {
+    message.error('Clipboard copy failed in this browser context.')
   }
 }
 
@@ -793,6 +908,10 @@ function toErrorMessage(error: unknown): string {
             <span class="stat-label">Selected</span>
             <strong>{{ selectedCount }}</strong>
           </div>
+          <div class="stat-pill">
+            <span class="stat-label">Unclaimed</span>
+            <strong>{{ nodeCountSummary.unclaimed }}</strong>
+          </div>
         </div>
       </section>
 
@@ -823,6 +942,26 @@ function toErrorMessage(error: unknown): string {
               <div class="connection-hint">
                 <strong>Token storage:</strong>
                 <span>session-only in this browser tab</span>
+              </div>
+              <div class="install-command-panel">
+                <div class="install-command-panel__head">
+                  <strong>Universal install command</strong>
+                  <n-button
+                    secondary
+                    size="small"
+                    :disabled="!universalInstallCommand || loadingInstallCommand"
+                    @click="copyToClipboard(universalInstallCommand, 'Copied universal install command.')"
+                  >
+                    Copy
+                  </n-button>
+                </div>
+                <n-input
+                  :value="universalInstallCommand"
+                  readonly
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 4 }"
+                  placeholder="Connect to load the authenticated install command."
+                />
               </div>
               <n-space>
                 <n-button type="primary" :loading="loadingNodes" @click="loadNodes(true)">
@@ -855,6 +994,9 @@ function toErrorMessage(error: unknown): string {
                 <n-tag round :bordered="false" type="info">
                   {{ selectedCount }} selected
                 </n-tag>
+                <n-button secondary :disabled="!connected" @click="openAddNodeModal">
+                  Add node
+                </n-button>
                 <n-button
                   type="primary"
                   secondary
@@ -873,7 +1015,7 @@ function toErrorMessage(error: unknown): string {
               remote
               max-height="680"
               :columns="nodeColumns"
-              :data="nodes"
+              :data="visibleNodes"
               :checked-row-keys="selectedNodeIds"
               :row-key="(row: NodeSummaryResponse) => row.id"
               :row-props="
@@ -888,6 +1030,53 @@ function toErrorMessage(error: unknown): string {
         </n-card>
 
         <div class="side-stack">
+          <n-card :bordered="false" class="glass-card unclaimed-card">
+            <template #header>
+              <div class="card-head">
+                <div>
+                  <h2 class="section-title">Unclaimed nodes</h2>
+                  <p class="section-subtitle">
+                    Agents installed from the universal command land here until you claim them.
+                  </p>
+                </div>
+                <n-tag round :bordered="false" type="warning">
+                  {{ unclaimedNodes.length }}
+                </n-tag>
+              </div>
+            </template>
+
+            <n-empty
+              v-if="unclaimedNodes.length === 0"
+              description="No universal installs are waiting to be claimed."
+              class="empty-state"
+            />
+
+            <div v-else class="unclaimed-list">
+              <div
+                v-for="node in unclaimedNodes"
+                :key="node.id"
+                class="unclaimed-item"
+              >
+                <button type="button" class="unclaimed-item__body" @click="openNode(node)">
+                  <div class="unclaimed-item__title">
+                    {{ node.display_name || node.hostname || node.id }}
+                  </div>
+                  <div class="unclaimed-item__meta">
+                    {{ node.hostname || 'unknown host' }} · {{ node.primary_ip || 'no IP yet' }}
+                  </div>
+                </button>
+                <div class="unclaimed-item__actions">
+                  <n-tag round :bordered="false" :type="node.online ? 'success' : 'warning'">
+                    {{ node.online ? 'online' : 'waiting' }}
+                  </n-tag>
+                  <n-button size="small" type="primary" secondary @click="claimUnclaimedNode(node)">
+                    Claim
+                  </n-button>
+                </div>
+              </div>
+            </div>
+          </n-card>
+
           <n-card :bordered="false" class="glass-card detail-card">
             <template #header>
               <div class="card-head">
@@ -1265,6 +1454,60 @@ function toErrorMessage(error: unknown): string {
           </n-card>
         </div>
       </section>
+
+      <n-modal
+        v-model:show="addNodeModalOpen"
+        preset="card"
+        title="Add node"
+        class="install-modal"
+        :mask-closable="!creatingNode"
+      >
+        <div class="install-modal__body">
+          <n-form label-placement="top">
+            <n-form-item label="Display name">
+              <n-input
+                v-model:value="addNodeDisplayName"
+                placeholder="HK-01"
+                :disabled="creatingNode || createdNode !== null"
+              />
+            </n-form-item>
+          </n-form>
+
+          <n-space justify="end">
+            <n-button secondary @click="closeAddNodeModal">Close</n-button>
+            <n-button
+              type="primary"
+              :loading="creatingNode"
+              :disabled="createdNode !== null"
+              @click="submitCreateNode"
+            >
+              Generate command
+            </n-button>
+          </n-space>
+
+          <div v-if="createdNode" class="install-command-panel install-command-panel--modal">
+            <div class="install-command-panel__head">
+              <strong>{{ createdNode.display_name }}</strong>
+              <n-button
+                secondary
+                size="small"
+                @click="copyToClipboard(createdNode.install_command, 'Copied install command.')"
+              >
+                Copy
+              </n-button>
+            </div>
+            <n-input
+              :value="createdNode.install_command"
+              readonly
+              type="textarea"
+              :autosize="{ minRows: 3, maxRows: 5 }"
+            />
+            <p class="host-secondary">
+              Expires {{ formatDateTime(createdNode.expires_at) }}. Paste this command on the target VPS.
+            </p>
+          </div>
+        </div>
+      </n-modal>
     </main>
   </n-config-provider>
 </template>
@@ -1309,9 +1552,9 @@ function toErrorMessage(error: unknown): string {
 
 .hero-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  grid-template-columns: repeat(4, minmax(110px, 1fr));
   gap: 12px;
-  min-width: 360px;
+  min-width: 480px;
 }
 
 .stat-pill,
@@ -1371,6 +1614,25 @@ function toErrorMessage(error: unknown): string {
 
 .connection-hint {
   color: #3b556f;
+}
+
+.install-command-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.install-command-panel__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.install-command-panel--modal {
+  margin-top: 18px;
 }
 
 .workspace-grid {
@@ -1458,6 +1720,49 @@ function toErrorMessage(error: unknown): string {
 .service-list {
   display: grid;
   gap: 12px;
+}
+
+.unclaimed-list {
+  display: grid;
+  gap: 12px;
+}
+
+.unclaimed-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.84);
+}
+
+.unclaimed-item__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.unclaimed-item__actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.unclaimed-item__title {
+  font-weight: 600;
+}
+
+.unclaimed-item__meta {
+  margin-top: 4px;
+  color: #607891;
+  font-size: 13px;
 }
 
 .service-items {
@@ -1618,6 +1923,15 @@ function toErrorMessage(error: unknown): string {
 
 .mono-text {
   font-family: "SFMono-Regular", "JetBrains Mono", "Menlo", monospace;
+}
+
+.install-modal {
+  max-width: 720px;
+}
+
+.install-modal__body {
+  display: grid;
+  gap: 16px;
 }
 
 :deep(.node-row) {

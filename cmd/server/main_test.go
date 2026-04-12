@@ -16,6 +16,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestRegisterRequiresExistingSessionForNodeReuse(t *testing.T) {
@@ -140,6 +142,120 @@ func TestAPIRequiresTokenAndSanitizesNodeData(t *testing.T) {
 	if len(configResp.ConfigPaths) != 1 || configResp.ConfigPaths[0] != "/etc/xrayr/config.yml" {
 		t.Fatalf("expected detected config path, got %#v", configResp.ConfigPaths)
 	}
+	if configResp.Status != nodeStatusActive {
+		t.Fatalf("expected active status in config response, got %#v", configResp.Status)
+	}
+}
+
+func TestOpenDatabaseBackfillsNodeStatusForExistingRows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "server.db")
+
+	legacyDB, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	createLegacyTable := `
+CREATE TABLE node_records (
+  id TEXT PRIMARY KEY,
+  hostname TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  primary_ip TEXT NOT NULL DEFAULT '',
+  os TEXT NOT NULL DEFAULT '',
+  arch TEXT NOT NULL DEFAULT '',
+  kernel TEXT NOT NULL DEFAULT '',
+  agent_version TEXT NOT NULL DEFAULT '',
+  session_token_hash BLOB NOT NULL DEFAULT '',
+  service_flavors_json BLOB NOT NULL DEFAULT '',
+  allowed_paths_json BLOB NOT NULL DEFAULT '',
+  services_json BLOB NOT NULL DEFAULT '',
+  registered_at DATETIME NOT NULL,
+  last_register_at DATETIME NOT NULL,
+  last_heartbeat_at DATETIME,
+  last_agent_time_unix INTEGER NOT NULL DEFAULT 0,
+  online NUMERIC NOT NULL DEFAULT false,
+  cpu_percent REAL,
+  memory_used_bytes INTEGER NOT NULL DEFAULT 0,
+  memory_total_bytes INTEGER NOT NULL DEFAULT 0,
+  disk_used_bytes INTEGER NOT NULL DEFAULT 0,
+  disk_total_bytes INTEGER NOT NULL DEFAULT 0,
+  load_1 REAL,
+  load_5 REAL,
+  load_15 REAL,
+  config_error TEXT NOT NULL DEFAULT '',
+  created_at DATETIME,
+  updated_at DATETIME
+);`
+	if err := legacyDB.Exec(createLegacyTable).Error; err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := legacyDB.Exec(
+		`INSERT INTO node_records (id, hostname, display_name, registered_at, last_register_at) VALUES (?, ?, ?, ?, ?)`,
+		"legacy-node",
+		"legacy-host",
+		"Legacy Host",
+		now,
+		now,
+	).Error; err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	db, err := openDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("open migrated db: %v", err)
+	}
+
+	var record nodeRecord
+	if err := db.First(&record, "id = ?", "legacy-node").Error; err != nil {
+		t.Fatalf("load migrated row: %v", err)
+	}
+	if record.Status != nodeStatusActive {
+		t.Fatalf("expected migrated row status %q, got %q", nodeStatusActive, record.Status)
+	}
+}
+
+func TestLoadServerConfigFileAndMerge(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.yaml")
+	if err := os.WriteFile(path, []byte(`
+grpc_addr: ":5443"
+http_addr: ":9090"
+db_path: "/var/lib/jcmanager/custom.db"
+token: "from-file-agent"
+api_token: "from-file-api"
+external_url: "https://panel.example.test"
+`), 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	fileCfg, err := loadServerConfigFile(path)
+	if err != nil {
+		t.Fatalf("load server config: %v", err)
+	}
+
+	cfg := config{
+		GRPCAddr: defaultGRPCAddr,
+		HTTPAddr: ":7777",
+		DBPath:   defaultDatabasePath,
+	}
+	mergeServerConfig(&cfg, fileCfg)
+
+	if cfg.GRPCAddr != ":5443" {
+		t.Fatalf("expected grpc addr from file, got %q", cfg.GRPCAddr)
+	}
+	if cfg.HTTPAddr != ":7777" {
+		t.Fatalf("expected explicit flag value to win for http addr, got %q", cfg.HTTPAddr)
+	}
+	if cfg.DBPath != "/var/lib/jcmanager/custom.db" {
+		t.Fatalf("expected db path from file, got %q", cfg.DBPath)
+	}
+	if cfg.Token != "from-file-agent" || cfg.APIToken != "from-file-api" {
+		t.Fatalf("expected tokens from file, got %#v", cfg)
+	}
+	if cfg.ExternalURL != "https://panel.example.test" {
+		t.Fatalf("expected external url from file, got %q", cfg.ExternalURL)
+	}
 }
 
 func TestGetNodeConfigContentReturnsStructuredContent(t *testing.T) {
@@ -221,6 +337,304 @@ func TestGetNodeConfigContentReturnsStructuredContent(t *testing.T) {
 	logValue, ok := structured["log"].(map[string]any)
 	if !ok || logValue["level"] != "info" {
 		t.Fatalf("unexpected structured content %#v", response.StructuredContent)
+	}
+}
+
+func TestCreateNodeReturnsPendingInstallCommand(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := newTestServer(t)
+	srv.installConfig = config{
+		GRPCAddr: ":50051",
+		HTTPAddr: ":8080",
+	}
+
+	router := newTestAPIRouter(srv)
+	req := httptest.NewRequest(http.MethodPost, "/api/nodes/create", strings.NewReader(`{"display_name":"HK-01"}`))
+	req.Header.Set("Authorization", "Bearer api-secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "panel.example.test:8080"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var response createNodeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode create node response: %v", err)
+	}
+	if response.Status != nodeStatusPendingInstall {
+		t.Fatalf("expected pending_install status, got %#v", response)
+	}
+	if response.ID == "" || response.InstallSecret == "" {
+		t.Fatalf("expected id and install secret, got %#v", response)
+	}
+	if !strings.Contains(response.InstallCommand, "/install.sh?secret="+response.InstallSecret) {
+		t.Fatalf("expected install command with secret, got %q", response.InstallCommand)
+	}
+	if strings.Contains(response.InstallCommand, "agent-secret") {
+		t.Fatalf("install command must not leak shared agent token, got %q", response.InstallCommand)
+	}
+
+	var record nodeRecord
+	if err := srv.db.First(&record, "id = ?", response.ID).Error; err != nil {
+		t.Fatalf("load pending node: %v", err)
+	}
+	if record.Status != nodeStatusPendingInstall {
+		t.Fatalf("expected pending status in db, got %q", record.Status)
+	}
+	if string(record.InstallSecretHash) == response.InstallSecret || len(record.InstallSecretHash) == 0 {
+		t.Fatalf("expected hashed install secret in db, got %#v", record.InstallSecretHash)
+	}
+	if record.InstallSecretExpiresAt == nil || !record.InstallSecretExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("expected future install secret expiry, got %#v", record.InstallSecretExpiresAt)
+	}
+}
+
+func TestInstallScriptInjectsPendingNodeValues(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := newTestServer(t)
+	record := nodeRecord{
+		ID:                     "pending-node",
+		DisplayName:            "HK-01",
+		Status:                 nodeStatusPendingInstall,
+		InstallSecretHash:      hashToken("install-secret"),
+		InstallSecretExpiresAt: timePtr(time.Now().UTC().Add(time.Hour)),
+		RegisteredAt:           time.Now().UTC(),
+		LastRegisterAt:         time.Now().UTC(),
+		ServiceFlavorsJSON:     mustJSON(t, []string{}),
+		AllowedPathsJSON:       mustJSON(t, []string{}),
+		ServicesJSON:           mustJSON(t, []string{}),
+	}
+	if err := srv.db.Create(&record).Error; err != nil {
+		t.Fatalf("seed pending node: %v", err)
+	}
+
+	router := gin.New()
+	srv.registerInstallRoutes(router, config{
+		GRPCAddr: ":50051",
+		HTTPAddr: ":8080",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/install.sh?secret=install-secret", nil)
+	req.Host = "panel.example.test:8080"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `NODE_ID="pending-node"`) {
+		t.Fatalf("expected node id injection, got %s", body)
+	}
+	if !strings.Contains(body, `INSTALL_SECRET="install-secret"`) {
+		t.Fatalf("expected install secret injection, got %s", body)
+	}
+	if !strings.Contains(body, `INJECTED_DISPLAY_NAME="HK-01"`) {
+		t.Fatalf("expected display name injection, got %s", body)
+	}
+	if !strings.Contains(body, `SERVER_GRPC="panel.example.test:50051"`) {
+		t.Fatalf("expected grpc host injection, got %s", body)
+	}
+	if strings.Contains(body, `AGENT_TOKEN="agent-secret"`) {
+		t.Fatalf("install script must not inject shared agent token for secret installs, got %s", body)
+	}
+}
+
+func TestRegisterWithInstallSecretActivatesPendingNode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := newTestServer(t)
+	now := time.Now().UTC()
+	record := nodeRecord{
+		ID:                     "pending-node",
+		DisplayName:            "HK-01",
+		Status:                 nodeStatusPendingInstall,
+		InstallSecretHash:      hashToken("install-secret"),
+		InstallSecretExpiresAt: timePtr(now.Add(time.Hour)),
+		RegisteredAt:           now,
+		LastRegisterAt:         now,
+		ServiceFlavorsJSON:     mustJSON(t, []string{}),
+		AllowedPathsJSON:       mustJSON(t, []string{}),
+		ServicesJSON:           mustJSON(t, []string{}),
+	}
+	if err := srv.db.Create(&record).Error; err != nil {
+		t.Fatalf("seed pending node: %v", err)
+	}
+
+	resp, err := srv.Register(context.Background(), &jcmanagerpb.RegisterRequest{
+		Node: &jcmanagerpb.NodeInfo{
+			NodeId:       "pending-node",
+			Hostname:     "hk-host",
+			DisplayName:  "ignored-name",
+			PrimaryIp:    "10.0.0.8",
+			Os:           "linux",
+			Arch:         "amd64",
+			Kernel:       "6.8.0",
+			AgentVersion: "dev",
+		},
+		Token:         "agent-secret",
+		InstallSecret: "install-secret",
+	})
+	if err != nil {
+		t.Fatalf("register with install secret: %v", err)
+	}
+	if resp.GetNodeId() != "pending-node" {
+		t.Fatalf("expected claimed node id, got %#v", resp)
+	}
+	if resp.GetDisplayName() != "HK-01" {
+		t.Fatalf("expected precreated display name, got %#v", resp)
+	}
+	if resp.GetSessionToken() == "" {
+		t.Fatalf("expected session token in response, got %#v", resp)
+	}
+
+	var updated nodeRecord
+	if err := srv.db.First(&updated, "id = ?", "pending-node").Error; err != nil {
+		t.Fatalf("load updated node: %v", err)
+	}
+	if updated.Status != nodeStatusActive {
+		t.Fatalf("expected active status after claim, got %q", updated.Status)
+	}
+	if len(updated.InstallSecretHash) != 0 {
+		t.Fatalf("expected install secret cleared after claim, got %#v", updated.InstallSecretHash)
+	}
+	if updated.InstallSecretExpiresAt != nil {
+		t.Fatalf("expected install secret expiry cleared after claim, got %#v", updated.InstallSecretExpiresAt)
+	}
+	if updated.DisplayName != "HK-01" {
+		t.Fatalf("expected precreated display name to win, got %q", updated.DisplayName)
+	}
+}
+
+func TestDownloadAgentAcceptsPendingInstallSecret(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := newTestServer(t)
+	record := nodeRecord{
+		ID:                     "pending-node",
+		DisplayName:            "HK-01",
+		Status:                 nodeStatusPendingInstall,
+		InstallSecretHash:      hashToken("install-secret"),
+		InstallSecretExpiresAt: timePtr(time.Now().UTC().Add(time.Hour)),
+		RegisteredAt:           time.Now().UTC(),
+		LastRegisterAt:         time.Now().UTC(),
+		ServiceFlavorsJSON:     mustJSON(t, []string{}),
+		AllowedPathsJSON:       mustJSON(t, []string{}),
+		ServicesJSON:           mustJSON(t, []string{}),
+	}
+	if err := srv.db.Create(&record).Error; err != nil {
+		t.Fatalf("seed pending node: %v", err)
+	}
+
+	rootDir := t.TempDir()
+	agentsDir := filepath.Join(rootDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
+	}
+	binaryPath := filepath.Join(agentsDir, "jcmanager-agent-linux-amd64")
+	if err := os.WriteFile(binaryPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write agent binary: %v", err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(rootDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+
+	router := gin.New()
+	srv.registerInstallRoutes(router, config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/download/agent?arch=amd64&secret=install-secret", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for secret download, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetInstallCommandRequiresAPIAuthAndUsesBearerToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := newTestServer(t)
+	srv.installConfig = config{
+		GRPCAddr: ":50051",
+		HTTPAddr: ":8080",
+	}
+	router := newTestAPIRouter(srv)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/install-command", nil)
+	req.Host = "panel.example.test:8080"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Authorization", "Bearer api-secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var response installCommandResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode install command response: %v", err)
+	}
+	if !strings.Contains(response.InstallCommand, "https://panel.example.test:8080/install.sh") {
+		t.Fatalf("expected forwarded https origin, got %q", response.InstallCommand)
+	}
+	if !strings.Contains(response.InstallCommand, "--token 'agent-secret'") {
+		t.Fatalf("expected command to carry shared agent token via authenticated api, got %q", response.InstallCommand)
+	}
+}
+
+func TestClaimNodePromotesUnclaimedNode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := newTestServer(t)
+	now := time.Now().UTC()
+	record := nodeRecord{
+		ID:                 "unclaimed-node",
+		DisplayName:        "Host 01",
+		Hostname:           "host-01",
+		Status:             nodeStatusUnclaimed,
+		SessionTokenHash:   hashToken("session"),
+		RegisteredAt:       now,
+		LastRegisterAt:     now,
+		ServiceFlavorsJSON: mustJSON(t, []string{}),
+		AllowedPathsJSON:   mustJSON(t, []string{}),
+		ServicesJSON:       mustJSON(t, []string{}),
+	}
+	if err := srv.db.Create(&record).Error; err != nil {
+		t.Fatalf("seed unclaimed node: %v", err)
+	}
+
+	router := newTestAPIRouter(srv)
+	req := httptest.NewRequest(http.MethodPost, "/api/nodes/unclaimed-node/claim", strings.NewReader(`{"display_name":"HK-01"}`))
+	req.Header.Set("Authorization", "Bearer api-secret")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var updated nodeRecord
+	if err := srv.db.First(&updated, "id = ?", "unclaimed-node").Error; err != nil {
+		t.Fatalf("load updated node: %v", err)
+	}
+	if updated.Status != nodeStatusActive {
+		t.Fatalf("expected active status after claim, got %q", updated.Status)
+	}
+	if updated.DisplayName != "HK-01" {
+		t.Fatalf("expected updated display name after claim, got %q", updated.DisplayName)
 	}
 }
 

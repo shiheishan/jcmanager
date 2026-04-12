@@ -1,0 +1,14 @@
+services:
+  jcmanager:
+    build: .
+    image: ${JCMANAGER_IMAGE:-ghcr.io/shiheishan/jcmanager:latest}
+    restart: unless-stopped
+    ports:
+      - "${JCMANAGER_HTTP_PORT:-8080}:8080"
+      - "${JCMANAGER_GRPC_PORT:-50051}:50051"
+    environment:
+      JCMANAGER_AGENT_TOKEN: ${JCMANAGER_AGENT_TOKEN:?set JCMANAGER_AGENT_TOKEN}
+      JCMANAGER_API_TOKEN: ${JCMANAGER_API_TOKEN:?set JCMANAGER_API_TOKEN}
+      JCMANAGER_EXTERNAL_URL: ${JCMANAGER_EXTERNAL_URL:-}
+    volumes:
+      - ./data:/var/lib/jcmanager
