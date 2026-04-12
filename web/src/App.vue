@@ -40,6 +40,7 @@ import {
 import { useTaskStream } from './composables/useTaskStream'
 import StructuredValueEditor from './components/StructuredValueEditor.vue'
 import { parseStructuredContent, serializeConfigContent } from './config-format'
+import { suggestNextNodeDisplayName } from './nodeDisplayName'
 import type {
   ConfigPushRequest,
   ConfigTaskResponse,
@@ -156,6 +157,7 @@ const selectedCount = computed(() => selectedNodeIds.value.length)
 const connected = computed(() => apiConfig.value.token.length > 0)
 const visibleNodes = computed(() => nodes.value.filter((node) => node.status !== 'unclaimed'))
 const unclaimedNodes = computed(() => nodes.value.filter((node) => node.status === 'unclaimed'))
+const nextAddNodeDisplayName = computed(() => suggestNextNodeDisplayName(nodes.value))
 
 const nodeCountSummary = computed(() => {
   const total = nodes.value.length
@@ -410,7 +412,7 @@ async function loadInstallCommand() {
 }
 
 function openAddNodeModal() {
-  addNodeDisplayName.value = ''
+  addNodeDisplayName.value = nextAddNodeDisplayName.value
   createdNode.value = null
   addNodeModalOpen.value = true
 }
@@ -1467,7 +1469,7 @@ function toErrorMessage(error: unknown): string {
             <n-form-item label="Display name">
               <n-input
                 v-model:value="addNodeDisplayName"
-                placeholder="HK-01"
+                :placeholder="nextAddNodeDisplayName"
                 :disabled="creatingNode || createdNode !== null"
               />
             </n-form-item>
