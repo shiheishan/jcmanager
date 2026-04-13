@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1.0] - 2026-04-13
+
+### Added
+- Chinese-first console copy across the main panel flow, including connection, node list, unclaimed nodes, config editor, task progress, and add-node command modal
+- Focused frontend regression coverage for localized node/task status, event, and task-type translation paths
+
+### Changed
+- Refactored console status/event/task-type translation into a dedicated frontend helper module so the localized state mapping is easier to maintain and test
+- Docker release pipeline now publishes multi-architecture images for both `linux/amd64` and `linux/arm64`
+
+### Fixed
+- Agent install script now escapes double-quoted YAML values before writing `agent.yaml`, preventing installs from breaking on names or paths containing quotes or backslashes
+- Server install script now generates random tokens without tripping `set -euo pipefail`, so fresh installs don't die on token creation
+- Web panel dates and relative-time labels now render in Chinese instead of falling back to English phrasing
+
 ## [0.2.0.0] - 2026-04-12
 
 ### Added
