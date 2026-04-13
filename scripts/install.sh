@@ -70,6 +70,15 @@ detect_init() {
     fi
 }
 
+yaml_escape_double_quoted() {
+    local value="$1"
+    value="${value//$'\r'/}"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    printf '%s' "$value"
+}
+
 # ── uninstall ────────────────────────────────────────────
 
 do_uninstall() {
@@ -224,11 +233,11 @@ do_install() {
 
     # build allowed_paths from detected configs
     local allowed_paths=""
-    [ -n "$xrayr_path" ] && allowed_paths="  - \"$(dirname "$xrayr_path")/\""
+    [ -n "$xrayr_path" ] && allowed_paths="  - \"$(yaml_escape_double_quoted "$(dirname "$xrayr_path")/")\""
     if [ -n "$v2bx_path" ]; then
         [ -n "$allowed_paths" ] && allowed_paths="$allowed_paths
 "
-        allowed_paths="${allowed_paths}  - \"$(dirname "$v2bx_path")/\""
+        allowed_paths="${allowed_paths}  - \"$(yaml_escape_double_quoted "$(dirname "$v2bx_path")/")\""
     fi
 
     # download agent binary
@@ -278,14 +287,14 @@ do_install() {
 
     cat > "$config_file" << YAML
 server:
-  address: "${SERVER_GRPC}"
-  token: "${AGENT_TOKEN}"
+  address: "$(yaml_escape_double_quoted "$SERVER_GRPC")"
+  token: "$(yaml_escape_double_quoted "$AGENT_TOKEN")"
   insecure: true
-node_id: "${NODE_ID}"
-install_secret: "${INSTALL_SECRET}"
-display_name: "${display_name}"
-xrayr_config_path: "${xrayr_path}"
-v2bx_config_path: "${v2bx_path}"
+node_id: "$(yaml_escape_double_quoted "$NODE_ID")"
+install_secret: "$(yaml_escape_double_quoted "$INSTALL_SECRET")"
+display_name: "$(yaml_escape_double_quoted "$display_name")"
+xrayr_config_path: "$(yaml_escape_double_quoted "$xrayr_path")"
+v2bx_config_path: "$(yaml_escape_double_quoted "$v2bx_path")"
 allowed_paths:
 ${allowed_paths:-  []}
 YAML
