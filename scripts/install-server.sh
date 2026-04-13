@@ -37,7 +37,7 @@ detect_arch() {
 }
 
 random_token() {
-  tr -dc 'a-f0-9' </dev/urandom | head -c 64
+  od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
 }
 
 read_config_value() {

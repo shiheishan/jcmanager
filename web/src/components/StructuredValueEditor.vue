@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NButton, NCard, NInput, NInputNumber, NSelect, NSpace, NSwitch, NTag } from 'naive-ui'
+import { NButton, NCard, NInput, NInputNumber, NSelect, NSwitch, NTag } from 'naive-ui'
+import { zhCN } from '../copy/zh-CN'
 
 defineOptions({
   name: 'StructuredValueEditor'
@@ -22,11 +23,13 @@ const emit = defineEmits<{
   'update:modelValue': [value: unknown]
 }>()
 
+const copy = zhCN.structuredEditor
+
 const scalarTypeOptions = [
-  { label: 'Text', value: 'string' },
-  { label: 'Number', value: 'number' },
-  { label: 'Boolean', value: 'boolean' },
-  { label: 'Null', value: 'null' }
+  { label: copy.scalarTypes.text, value: 'string' },
+  { label: copy.scalarTypes.number, value: 'number' },
+  { label: copy.scalarTypes.boolean, value: 'boolean' },
+  { label: copy.scalarTypes.null, value: 'null' }
 ]
 
 const valueKind = computed(() => detectValueKind(props.modelValue))
@@ -75,7 +78,7 @@ function removeObjectField(key: string) {
 
 function addObjectField() {
   const current = { ...((props.modelValue ?? {}) as Record<string, unknown>) }
-  const base = 'new_key'
+  const base: string = copy.newKeyBase
   let candidate = base
   let index = 1
   for (;;) {
@@ -153,10 +156,10 @@ function detectScalarKind(value: unknown): string {
     <div v-if="valueKind === 'object'" class="branch-shell">
       <div class="branch-head">
         <div class="branch-label">
-          <span>{{ label || 'Object' }}</span>
-          <n-tag size="small" :bordered="false">object</n-tag>
+          <span>{{ label || copy.labels.object }}</span>
+          <n-tag size="small" :bordered="false">{{ copy.tags.object }}</n-tag>
         </div>
-        <n-button tertiary size="small" @click="addObjectField">Add field</n-button>
+        <n-button tertiary size="small" @click="addObjectField">{{ copy.actions.addField }}</n-button>
       </div>
 
       <div class="branch-body">
@@ -171,11 +174,11 @@ function detectScalarKind(value: unknown): string {
             <n-input
               :value="entryKey"
               size="small"
-              placeholder="field name"
+              :placeholder="copy.placeholders.fieldName"
               @update:value="renameObjectField(entryKey, $event)"
             />
             <n-button tertiary size="small" type="error" @click="removeObjectField(entryKey)">
-              Remove
+              {{ copy.actions.remove }}
             </n-button>
           </div>
 
@@ -191,10 +194,10 @@ function detectScalarKind(value: unknown): string {
     <div v-else-if="valueKind === 'array'" class="branch-shell">
       <div class="branch-head">
         <div class="branch-label">
-          <span>{{ label || 'Array' }}</span>
-          <n-tag size="small" :bordered="false">array</n-tag>
+          <span>{{ label || copy.labels.array }}</span>
+          <n-tag size="small" :bordered="false">{{ copy.tags.array }}</n-tag>
         </div>
-        <n-button tertiary size="small" @click="addArrayItem">Add item</n-button>
+        <n-button tertiary size="small" @click="addArrayItem">{{ copy.actions.addItem }}</n-button>
       </div>
 
       <div class="branch-body">
@@ -206,9 +209,9 @@ function detectScalarKind(value: unknown): string {
           class="entry-card"
         >
           <div class="entry-head">
-            <span class="entry-index">Item {{ index + 1 }}</span>
+            <span class="entry-index">{{ copy.itemLabel(index + 1) }}</span>
             <n-button tertiary size="small" type="error" @click="removeArrayItem(index)">
-              Remove
+              {{ copy.actions.remove }}
             </n-button>
           </div>
 
@@ -236,7 +239,7 @@ function detectScalarKind(value: unknown): string {
       <n-input
         v-if="scalarKind === 'string'"
         :value="modelValue == null ? '' : String(modelValue)"
-        placeholder="text value"
+        :placeholder="copy.placeholders.textValue"
         @update:value="emitValue"
       />
 
@@ -248,12 +251,12 @@ function detectScalarKind(value: unknown): string {
       />
 
       <div v-else-if="scalarKind === 'boolean'" class="boolean-row">
-        <span>{{ modelValue ? 'True' : 'False' }}</span>
+        <span>{{ modelValue ? copy.booleanValue.true : copy.booleanValue.false }}</span>
         <n-switch :value="Boolean(modelValue)" @update:value="emitValue" />
       </div>
 
       <div v-else class="null-row">
-        <n-tag :bordered="false">null</n-tag>
+        <n-tag :bordered="false">{{ copy.tags.null }}</n-tag>
       </div>
     </div>
   </div>

@@ -40,6 +40,7 @@ import {
 import { useTaskStream } from './composables/useTaskStream'
 import StructuredValueEditor from './components/StructuredValueEditor.vue'
 import { parseStructuredContent, serializeConfigContent } from './config-format'
+import { zhCN } from './copy/zh-CN'
 import { suggestNextNodeDisplayName } from './nodeDisplayName'
 import type {
   ConfigPushRequest,
@@ -83,6 +84,7 @@ const themeOverrides: GlobalThemeOverrides = {
 }
 
 const { message } = createDiscreteApi(['message'])
+const copy = zhCN
 
 const apiBaseUrl = ref(readStoredValue(storageKeys.apiBaseUrl, import.meta.env.VITE_API_BASE_URL ?? ''))
 const apiToken = ref(
@@ -221,7 +223,7 @@ const nodeColumns = computed<DataTableColumns<NodeSummaryResponse>>(() => [
     type: 'selection'
   },
   {
-    title: 'Hostname',
+    title: copy.nodes.columns.hostname,
     key: 'hostname',
     minWidth: 220,
     render: (row) =>
@@ -235,30 +237,23 @@ const nodeColumns = computed<DataTableColumns<NodeSummaryResponse>>(() => [
       ])
   },
   {
-    title: 'IP',
+    title: copy.nodes.columns.ip,
     key: 'primary_ip',
     minWidth: 140,
-    render: (row) => h('span', { class: 'mono-text' }, row.primary_ip || 'n/a')
+    render: (row) => h('span', { class: 'mono-text' }, row.primary_ip || copy.common.notAvailable)
   },
   {
-    title: 'Protocol',
+    title: copy.nodes.columns.protocol,
     key: 'protocol',
     minWidth: 170,
     render: (row) => renderProtocolTags(row)
   },
   {
-    title: 'Status',
+    title: copy.nodes.columns.status,
     key: 'online',
     width: 110,
     render: (row) => {
-      const statusLabel =
-        row.status === 'pending_install'
-          ? 'Pending'
-          : row.status === 'unclaimed'
-            ? 'Unclaimed'
-            : row.online
-              ? 'Online'
-              : 'Offline'
+      const statusLabel = translateNodeStatus(row.status, row.online)
       const statusType =
         row.status === 'pending_install'
           ? 'warning'
@@ -282,7 +277,7 @@ const nodeColumns = computed<DataTableColumns<NodeSummaryResponse>>(() => [
     }
   },
   {
-    title: 'Last Heartbeat',
+    title: copy.nodes.columns.lastHeartbeat,
     key: 'last_heartbeat_at',
     minWidth: 180,
     render: (row) =>
@@ -295,19 +290,19 @@ const nodeColumns = computed<DataTableColumns<NodeSummaryResponse>>(() => [
 
 const taskNodeColumns = computed<DataTableColumns<TaskNodeResponse>>(() => [
   {
-    title: 'Node',
+    title: copy.progress.columns.node,
     key: 'node_id',
     minWidth: 150,
     render: (row) => h('span', { class: 'mono-text' }, row.node_id)
   },
   {
-    title: 'Status',
+    title: copy.progress.columns.status,
     key: 'status',
     width: 120,
     render: (row) => renderTaskStatus(row.status)
   },
   {
-    title: 'Changed',
+    title: copy.progress.columns.changed,
     key: 'changed',
     width: 100,
     render: (row) =>
@@ -319,12 +314,12 @@ const taskNodeColumns = computed<DataTableColumns<TaskNodeResponse>>(() => [
           bordered: false
         },
         {
-          default: () => (row.changed ? 'Yes' : 'No')
+          default: () => (row.changed ? copy.progress.changed.yes : copy.progress.changed.no)
         }
       )
   },
   {
-    title: 'Message',
+    title: copy.progress.columns.message,
     key: 'message',
     minWidth: 280,
     ellipsis: {
@@ -332,7 +327,7 @@ const taskNodeColumns = computed<DataTableColumns<TaskNodeResponse>>(() => [
     }
   },
   {
-    title: 'Updated',
+    title: copy.progress.columns.updated,
     key: 'updated_at',
     width: 180,
     render: (row) => formatDateTime(row.updated_at)
@@ -373,7 +368,7 @@ onBeforeUnmount(() => {
 
 async function loadNodes(showToast = false) {
   if (!connected.value) {
-    nodesError.value = 'Set an API token to load nodes.'
+    nodesError.value = copy.errors.loadNodesNeedsToken
     return
   }
 
@@ -384,7 +379,7 @@ async function loadNodes(showToast = false) {
     nodes.value = await listNodes(apiConfig.value)
     await loadInstallCommand()
     if (showToast) {
-      message.success(`Loaded ${nodes.value.length} node${nodes.value.length === 1 ? '' : 's'}.`)
+      message.success(copy.messages.loadedNodes(nodes.value.length))
     }
 
     if (activeNodeId.value && !nodes.value.some((node) => node.id === activeNodeId.value)) {
@@ -423,11 +418,11 @@ function closeAddNodeModal() {
 
 async function submitCreateNode() {
   if (!connected.value) {
-    message.error('Set an API token before creating nodes.')
+    message.error(copy.errors.createNodeNeedsToken)
     return
   }
   if (!addNodeDisplayName.value.trim()) {
-    message.error('Display name is required.')
+    message.error(copy.errors.displayNameRequired)
     return
   }
 
@@ -437,7 +432,7 @@ async function submitCreateNode() {
       display_name: addNodeDisplayName.value.trim()
     })
     await loadNodes(false)
-    message.success(`Created install command for ${createdNode.value.display_name}.`)
+    message.success(copy.messages.createdInstallCommand(createdNode.value.display_name))
   } catch (error) {
     message.error(toErrorMessage(error))
   } finally {
@@ -447,7 +442,7 @@ async function submitCreateNode() {
 
 async function claimUnclaimedNode(node: NodeSummaryResponse) {
   if (!connected.value) {
-    message.error('Set an API token before claiming nodes.')
+    message.error(copy.errors.claimNeedsToken)
     return
   }
 
@@ -456,7 +451,7 @@ async function claimUnclaimedNode(node: NodeSummaryResponse) {
       display_name: node.display_name || node.hostname || node.id
     })
     await loadNodes(false)
-    message.success(`Claimed ${claimed.display_name || claimed.hostname || claimed.id}.`)
+    message.success(copy.messages.claimedNode(claimed.display_name || claimed.hostname || claimed.id))
     await openNode(claimed)
   } catch (error) {
     message.error(toErrorMessage(error))
@@ -465,20 +460,20 @@ async function claimUnclaimedNode(node: NodeSummaryResponse) {
 
 async function copyToClipboard(value: string, successMessage: string) {
   if (typeof navigator === 'undefined' || !navigator.clipboard) {
-    message.error('Clipboard copy is unavailable in this browser context.')
+    message.error(copy.errors.clipboardUnavailable)
     return
   }
   try {
     await navigator.clipboard.writeText(value)
     message.success(successMessage)
   } catch {
-    message.error('Clipboard copy failed in this browser context.')
+    message.error(copy.errors.clipboardFailed)
   }
 }
 
 async function openNode(node: NodeSummaryResponse) {
   if (!connected.value) {
-    message.error('Set an API token before loading node details.')
+    message.error(copy.errors.loadNodeNeedsToken)
     return
   }
 
@@ -569,10 +564,10 @@ async function loadConfigContent(nodeId: string, path: string) {
 
 function validateForm(): string | null {
   if (!form.path.trim()) {
-    return 'Config path is required.'
+    return copy.errors.configPathRequired
   }
   if (form.restart_after_write && !form.service_name.trim()) {
-    return 'Service name is required when restart-after-write is enabled.'
+    return copy.errors.serviceNameRequired
   }
   return null
 }
@@ -623,7 +618,7 @@ function makePayload(): ConfigPushRequest {
 
 async function applyToActiveNode() {
   if (!activeNodeId.value) {
-    message.error('Select a node first.')
+    message.error(copy.errors.selectNodeFirst)
     return
   }
 
@@ -636,7 +631,10 @@ async function applyToActiveNode() {
   submitting.value = true
   try {
     const task = await pushNodeConfig(apiConfig.value, activeNodeId.value, makePayload())
-    attachTask(task, `Queued config push for ${activeNodeSummary.value?.hostname || activeNodeId.value}.`)
+    attachTask(
+      task,
+      copy.messages.queuedSingleNode(activeNodeSummary.value?.hostname || activeNodeId.value)
+    )
   } catch (error) {
     message.error(toErrorMessage(error))
   } finally {
@@ -646,7 +644,7 @@ async function applyToActiveNode() {
 
 async function applyToSelection() {
   if (selectedNodeIds.value.length === 0) {
-    message.error('Select one or more nodes for batch apply.')
+    message.error(copy.errors.selectBatchNodes)
     return
   }
 
@@ -663,7 +661,7 @@ async function applyToSelection() {
       node_ids: selectedNodeIds.value,
       canary_mode: form.canary_mode
     })
-    attachTask(task, `Queued config push for ${selectedNodeIds.value.length} selected nodes.`)
+    attachTask(task, copy.messages.queuedBatchNodes(selectedNodeIds.value.length))
   } catch (error) {
     message.error(toErrorMessage(error))
   } finally {
@@ -721,7 +719,7 @@ function renderProtocolTags(row: NodeSummaryResponse) {
         round: true
       },
       {
-        default: () => 'unknown'
+        default: () => copy.common.unknown
       }
     )
   }
@@ -770,9 +768,66 @@ function renderTaskStatus(status: string) {
       round: true
     },
     {
-      default: () => normalized || 'pending'
+      default: () => translateTaskStatus(normalized)
     }
   )
+}
+
+function translateNodeStatus(status: string, online: boolean) {
+  const normalized = status.trim().toLowerCase()
+  if (normalized === 'pending_install') {
+    return copy.status.node.pendingInstall
+  }
+  if (normalized === 'unclaimed') {
+    return copy.status.node.unclaimed
+  }
+  return online ? copy.status.node.online : copy.status.node.offline
+}
+
+function translateTaskStatus(status: string) {
+  const normalized = status.trim().toLowerCase()
+  if (!normalized) {
+    return copy.status.task.pending
+  }
+  switch (normalized) {
+    case 'queued':
+      return copy.status.task.queued
+    case 'running':
+      return copy.status.task.running
+    case 'succeeded':
+      return copy.status.task.succeeded
+    case 'failed':
+      return copy.status.task.failed
+    case 'skipped':
+      return copy.status.task.skipped
+    case 'halted':
+      return copy.status.task.halted
+    default:
+      return status
+  }
+}
+
+function translateTaskEvent(event: string) {
+  const normalized = event.trim().toLowerCase()
+  switch (normalized) {
+    case 'task_created':
+      return copy.status.event.taskCreated
+    case 'task_complete':
+      return copy.status.event.taskComplete
+    case 'task_halted':
+      return copy.status.event.taskHalted
+    case 'node_started':
+      return copy.status.event.nodeStarted
+    case 'node_updated':
+      return copy.status.event.nodeUpdated
+    default:
+      return copy.status.event.taskUpdated
+  }
+}
+
+function translateTaskType(type: string) {
+  const normalized = type.trim().toLowerCase()
+  return copy.taskType[normalized as keyof typeof copy.taskType] ?? type
 }
 
 function deriveProtocols(node: NodeSummaryResponse): string[] {
@@ -785,7 +840,7 @@ function deriveProtocols(node: NodeSummaryResponse): string[] {
 
 function formatDateTime(value?: string) {
   if (!value) {
-    return 'Never'
+    return copy.relativeTime.never
   }
 
   const date = new Date(value)
@@ -793,7 +848,7 @@ function formatDateTime(value?: string) {
     return value
   }
 
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat('zh-CN', {
     dateStyle: 'medium',
     timeStyle: 'short'
   }).format(date)
@@ -801,7 +856,7 @@ function formatDateTime(value?: string) {
 
 function formatRelativeTime(value: string | undefined, nowMs: number) {
   if (!value) {
-    return 'No heartbeat yet'
+    return copy.relativeTime.noHeartbeat
   }
 
   const date = new Date(value)
@@ -812,19 +867,19 @@ function formatRelativeTime(value: string | undefined, nowMs: number) {
 
   const deltaMinutes = Math.round(deltaMs / 60_000)
   if (deltaMinutes <= 0) {
-    return 'Just now'
+    return copy.relativeTime.justNow
   }
   if (deltaMinutes < 60) {
-    return `${deltaMinutes}m ago`
+    return copy.relativeTime.minutesAgo(deltaMinutes)
   }
 
   const deltaHours = Math.round(deltaMinutes / 60)
   if (deltaHours < 24) {
-    return `${deltaHours}h ago`
+    return copy.relativeTime.hoursAgo(deltaHours)
   }
 
   const deltaDays = Math.round(deltaHours / 24)
-  return `${deltaDays}d ago`
+  return copy.relativeTime.daysAgo(deltaDays)
 }
 
 function formatBytes(value: number) {
@@ -878,7 +933,7 @@ function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message
   }
-  return 'Unexpected error'
+  return copy.common.unexpectedError
 }
 </script>
 
@@ -887,31 +942,30 @@ function toErrorMessage(error: unknown): string {
     <main class="console-shell">
       <section class="hero-panel">
         <div>
-          <p class="eyebrow">Node fleet console</p>
+          <p class="eyebrow">{{ copy.hero.eyebrow }}</p>
           <h1 class="hero-title">
             <n-gradient-text type="success">JCManager</n-gradient-text>
-            real-time rollout surface
+            {{ copy.hero.titleSuffix }}
           </h1>
           <p class="hero-copy">
-            Inspect node health, queue single-node or batch config pushes, and watch rollout
-            progress over authenticated SSE without leaving the page.
+            {{ copy.hero.copy }}
           </p>
         </div>
         <div class="hero-stats">
           <div class="stat-pill">
-            <span class="stat-label">Nodes</span>
+            <span class="stat-label">{{ copy.hero.stats.nodes }}</span>
             <strong>{{ nodeCountSummary.total }}</strong>
           </div>
           <div class="stat-pill">
-            <span class="stat-label">Online</span>
+            <span class="stat-label">{{ copy.hero.stats.online }}</span>
             <strong>{{ nodeCountSummary.online }}</strong>
           </div>
           <div class="stat-pill">
-            <span class="stat-label">Selected</span>
+            <span class="stat-label">{{ copy.hero.stats.selected }}</span>
             <strong>{{ selectedCount }}</strong>
           </div>
           <div class="stat-pill">
-            <span class="stat-label">Unclaimed</span>
+            <span class="stat-label">{{ copy.hero.stats.unclaimed }}</span>
             <strong>{{ nodeCountSummary.unclaimed }}</strong>
           </div>
         </div>
@@ -921,13 +975,13 @@ function toErrorMessage(error: unknown): string {
         <n-card :bordered="false" class="glass-card">
           <div class="connection-grid">
             <n-form label-placement="top" class="connection-form">
-              <n-form-item label="API base URL">
+              <n-form-item :label="copy.connection.apiBaseUrlLabel">
                 <n-input
                   v-model:value="apiBaseUrl"
-                  placeholder="Leave blank for same-origin or Vite proxy"
+                  :placeholder="copy.connection.apiBaseUrlPlaceholder"
                 />
               </n-form-item>
-              <n-form-item label="Bearer token">
+              <n-form-item :label="copy.connection.tokenLabel">
                 <n-input
                   v-model:value="apiToken"
                   type="password"
@@ -938,23 +992,23 @@ function toErrorMessage(error: unknown): string {
             </n-form>
             <div class="connection-actions">
               <div class="connection-hint">
-                <strong>Target:</strong>
-                <span>{{ apiBaseUrl.trim() || 'same-origin / Vite proxy' }}</span>
+                <strong>{{ copy.connection.target }}:</strong>
+                <span>{{ apiBaseUrl.trim() || copy.common.sameOriginProxy }}</span>
               </div>
               <div class="connection-hint">
-                <strong>Token storage:</strong>
-                <span>session-only in this browser tab</span>
+                <strong>{{ copy.connection.tokenStorage }}:</strong>
+                <span>{{ copy.connection.tokenStorageValue }}</span>
               </div>
               <div class="install-command-panel">
                 <div class="install-command-panel__head">
-                  <strong>Universal install command</strong>
+                  <strong>{{ copy.connection.installCommand }}</strong>
                   <n-button
                     secondary
                     size="small"
                     :disabled="!universalInstallCommand || loadingInstallCommand"
-                    @click="copyToClipboard(universalInstallCommand, 'Copied universal install command.')"
+                    @click="copyToClipboard(universalInstallCommand, copy.messages.copiedUniversalInstallCommand)"
                   >
-                    Copy
+                    {{ copy.common.copy }}
                   </n-button>
                 </div>
                 <n-input
@@ -962,21 +1016,21 @@ function toErrorMessage(error: unknown): string {
                   readonly
                   type="textarea"
                   :autosize="{ minRows: 2, maxRows: 4 }"
-                  placeholder="Connect to load the authenticated install command."
+                  :placeholder="copy.connection.installCommandPlaceholder"
                 />
               </div>
               <n-space>
                 <n-button type="primary" :loading="loadingNodes" @click="loadNodes(true)">
-                  Connect
+                  {{ copy.connection.connect }}
                 </n-button>
                 <n-button secondary :disabled="!connected" @click="clearSelection">
-                  Clear selection
+                  {{ copy.connection.clearSelection }}
                 </n-button>
               </n-space>
             </div>
           </div>
 
-          <n-alert v-if="nodesError" title="Node list error" type="error" class="section-alert">
+          <n-alert v-if="nodesError" :title="copy.connection.nodeListError" type="error" class="section-alert">
             {{ nodesError }}
           </n-alert>
         </n-card>
@@ -987,17 +1041,15 @@ function toErrorMessage(error: unknown): string {
           <template #header>
             <div class="card-head">
               <div>
-                <h2 class="section-title">Nodes</h2>
-                <p class="section-subtitle">
-                  Click any row to load config targets and service metadata.
-                </p>
+                <h2 class="section-title">{{ copy.nodes.title }}</h2>
+                <p class="section-subtitle">{{ copy.nodes.subtitle }}</p>
               </div>
               <n-space align="center">
                 <n-tag round :bordered="false" type="info">
-                  {{ selectedCount }} selected
+                  {{ copy.nodes.selectedTag(selectedCount) }}
                 </n-tag>
                 <n-button secondary :disabled="!connected" @click="openAddNodeModal">
-                  Add node
+                  {{ copy.nodes.addNode }}
                 </n-button>
                 <n-button
                   type="primary"
@@ -1006,7 +1058,7 @@ function toErrorMessage(error: unknown): string {
                   :loading="submitting"
                   @click="applyToSelection"
                 >
-                  Apply to selected
+                  {{ copy.nodes.applyToSelected }}
                 </n-button>
               </n-space>
             </div>
@@ -1036,10 +1088,8 @@ function toErrorMessage(error: unknown): string {
             <template #header>
               <div class="card-head">
                 <div>
-                  <h2 class="section-title">Unclaimed nodes</h2>
-                  <p class="section-subtitle">
-                    Agents installed from the universal command land here until you claim them.
-                  </p>
+                  <h2 class="section-title">{{ copy.unclaimed.title }}</h2>
+                  <p class="section-subtitle">{{ copy.unclaimed.subtitle }}</p>
                 </div>
                 <n-tag round :bordered="false" type="warning">
                   {{ unclaimedNodes.length }}
@@ -1049,7 +1099,7 @@ function toErrorMessage(error: unknown): string {
 
             <n-empty
               v-if="unclaimedNodes.length === 0"
-              description="No universal installs are waiting to be claimed."
+              :description="copy.unclaimed.empty"
               class="empty-state"
             />
 
@@ -1064,15 +1114,15 @@ function toErrorMessage(error: unknown): string {
                     {{ node.display_name || node.hostname || node.id }}
                   </div>
                   <div class="unclaimed-item__meta">
-                    {{ node.hostname || 'unknown host' }} · {{ node.primary_ip || 'no IP yet' }}
+                    {{ node.hostname || copy.unclaimed.unknownHost }} · {{ node.primary_ip || copy.unclaimed.noIpYet }}
                   </div>
                 </button>
                 <div class="unclaimed-item__actions">
                   <n-tag round :bordered="false" :type="node.online ? 'success' : 'warning'">
-                    {{ node.online ? 'online' : 'waiting' }}
+                    {{ node.online ? copy.unclaimed.online : copy.unclaimed.waiting }}
                   </n-tag>
                   <n-button size="small" type="primary" secondary @click="claimUnclaimedNode(node)">
-                    Claim
+                    {{ copy.unclaimed.claim }}
                   </n-button>
                 </div>
               </div>
@@ -1083,10 +1133,8 @@ function toErrorMessage(error: unknown): string {
             <template #header>
               <div class="card-head">
                 <div>
-                  <h2 class="section-title">Config editor</h2>
-                  <p class="section-subtitle">
-                    Batch selection uses this same structured payload for the rollout.
-                  </p>
+                  <h2 class="section-title">{{ copy.editor.title }}</h2>
+                  <p class="section-subtitle">{{ copy.editor.subtitle }}</p>
                 </div>
                 <n-space>
                   <n-button
@@ -1095,7 +1143,7 @@ function toErrorMessage(error: unknown): string {
                     :loading="submitting"
                     @click="applyToActiveNode"
                   >
-                    Apply to node
+                    {{ copy.editor.applyToNode }}
                   </n-button>
                 </n-space>
               </div>
@@ -1107,14 +1155,14 @@ function toErrorMessage(error: unknown): string {
 
             <n-empty
               v-else-if="!activeNodeId"
-              description="Select a node to inspect its config surface and allowed paths."
+              :description="copy.editor.empty"
               class="empty-state"
             />
 
             <div v-else class="detail-layout">
               <n-alert
                 v-if="nodeDetailError"
-                title="Node detail error"
+                :title="copy.editor.nodeDetailError"
                 type="error"
                 class="section-alert"
               >
@@ -1138,22 +1186,22 @@ function toErrorMessage(error: unknown): string {
                         round
                         :bordered="false"
                       >
-                        {{ activeNodeDetail.online ? 'Online' : 'Offline' }}
+                        {{ activeNodeDetail.online ? copy.status.node.online : copy.status.node.offline }}
                       </n-tag>
                     </div>
                   </template>
                   <template #description>
                     <n-descriptions bordered label-placement="top" :column="2" size="small">
-                      <n-descriptions-item label="OS">
+                      <n-descriptions-item :label="copy.editor.descriptions.os">
                         {{ activeNodeDetail.os }} / {{ activeNodeDetail.arch }}
                       </n-descriptions-item>
-                      <n-descriptions-item label="Agent">
+                      <n-descriptions-item :label="copy.editor.descriptions.agent">
                         {{ activeNodeDetail.agent_version || 'dev' }}
                       </n-descriptions-item>
-                      <n-descriptions-item label="Heartbeat">
+                      <n-descriptions-item :label="copy.editor.descriptions.heartbeat">
                         {{ formatDateTime(activeNodeDetail.last_heartbeat_at) }}
                       </n-descriptions-item>
-                      <n-descriptions-item label="Memory">
+                      <n-descriptions-item :label="copy.editor.descriptions.memory">
                         {{ formatBytes(activeNodeDetail.memory_used_bytes) }} /
                         {{ formatBytes(activeNodeDetail.memory_total_bytes) }}
                       </n-descriptions-item>
@@ -1162,7 +1210,7 @@ function toErrorMessage(error: unknown): string {
                 </n-thing>
 
                 <div class="chip-group">
-                  <span class="chip-label">Protocols</span>
+                  <span class="chip-label">{{ copy.editor.chipLabels.protocols }}</span>
                   <n-space size="small">
                     <n-tag
                       v-for="protocol in deriveProtocols(activeNodeDetail)"
@@ -1177,7 +1225,7 @@ function toErrorMessage(error: unknown): string {
                 </div>
 
                 <div class="chip-group">
-                  <span class="chip-label">Allowed paths</span>
+                  <span class="chip-label">{{ copy.editor.chipLabels.allowedPaths }}</span>
                   <n-space size="small">
                     <n-tag
                       v-for="path in pathSuggestions"
@@ -1192,7 +1240,7 @@ function toErrorMessage(error: unknown): string {
                 </div>
 
                 <div class="chip-group">
-                  <span class="chip-label">Services</span>
+                  <span class="chip-label">{{ copy.editor.chipLabels.services }}</span>
                   <n-space size="small">
                     <n-tag
                       v-for="service in serviceSuggestions"
@@ -1207,7 +1255,7 @@ function toErrorMessage(error: unknown): string {
                 </div>
 
                 <div class="service-list">
-                  <h3 class="mini-title">Observed services</h3>
+                  <h3 class="mini-title">{{ copy.editor.observedServices }}</h3>
                   <div class="service-items">
                     <div
                       v-for="service in activeNodeDetail.services"
@@ -1222,11 +1270,11 @@ function toErrorMessage(error: unknown): string {
                           round
                           size="small"
                         >
-                          {{ service.active && service.listening ? 'healthy' : 'degraded' }}
+                          {{ service.active && service.listening ? copy.editor.serviceHealth.healthy : copy.editor.serviceHealth.degraded }}
                         </n-tag>
                       </div>
                       <div class="service-item__meta">
-                        Port {{ service.listen_port || 'n/a' }} · {{ service.message || 'no message' }}
+                        端口 {{ service.listen_port || copy.common.notAvailable }} · {{ service.message || '暂无消息' }}
                       </div>
                     </div>
                   </div>
@@ -1234,7 +1282,7 @@ function toErrorMessage(error: unknown): string {
               </div>
 
               <n-form label-placement="top" class="editor-form">
-                <n-form-item label="Config path">
+                <n-form-item :label="copy.editor.form.path">
                   <n-select
                     v-model:value="form.path"
                     filterable
@@ -1243,7 +1291,7 @@ function toErrorMessage(error: unknown): string {
                     placeholder="/etc/XrayR/config.yml"
                   />
                 </n-form-item>
-                <n-form-item label="Restart service">
+                <n-form-item :label="copy.editor.form.serviceName">
                   <n-input
                     v-model:value="form.service_name"
                     :disabled="!form.restart_after_write"
@@ -1252,22 +1300,22 @@ function toErrorMessage(error: unknown): string {
                 </n-form-item>
                 <div class="toggle-row">
                   <div class="toggle-card">
-                    <span>Create backup</span>
+                    <span>{{ copy.editor.form.createBackup }}</span>
                     <n-switch v-model:value="form.create_backup" />
                   </div>
                   <div class="toggle-card">
-                    <span>Restart after write</span>
+                    <span>{{ copy.editor.form.restartAfterWrite }}</span>
                     <n-switch v-model:value="form.restart_after_write" />
                   </div>
                   <div class="toggle-card">
-                    <span>Canary mode</span>
+                    <span>{{ copy.editor.form.canaryMode }}</span>
                     <n-switch v-model:value="form.canary_mode" :disabled="selectedCount <= 1" />
                   </div>
                 </div>
 
                 <n-alert
                   v-if="configContentError"
-                  title="Config load error"
+                  :title="copy.editor.loadError"
                   type="warning"
                   class="section-alert"
                 >
@@ -1277,10 +1325,10 @@ function toErrorMessage(error: unknown): string {
                 <div class="editor-toolbar">
                   <div class="editor-toolbar__meta">
                     <span v-if="configContent">
-                      {{ configContent.format.toUpperCase() }} · {{ configContent.size_bytes }} bytes ·
+                      {{ configContent.format.toUpperCase() }} · {{ configContent.size_bytes }} {{ copy.editor.metadataByteUnit }} ·
                       {{ formatDateTime(new Date(configContent.mod_time_unix * 1000).toISOString()) }}
                     </span>
-                    <span v-else>No remote config loaded yet</span>
+                    <span v-else>{{ copy.editor.noRemoteConfig }}</span>
                   </div>
                   <n-space>
                     <n-button
@@ -1290,7 +1338,7 @@ function toErrorMessage(error: unknown): string {
                       :loading="loadingConfigContent"
                       @click="activeNodeId && loadConfigContent(activeNodeId, form.path)"
                     >
-                      Reload
+                      {{ copy.common.reload }}
                     </n-button>
                     <n-button
                       size="small"
@@ -1299,7 +1347,7 @@ function toErrorMessage(error: unknown): string {
                       :disabled="!configContent || structuredEditorValue == null"
                       @click="syncEditorMode('structured')"
                     >
-                      Structured
+                      {{ copy.editor.modes.structured }}
                     </n-button>
                     <n-button
                       size="small"
@@ -1307,22 +1355,22 @@ function toErrorMessage(error: unknown): string {
                       secondary
                       @click="syncEditorMode('raw')"
                     >
-                      Raw
+                      {{ copy.editor.modes.raw }}
                     </n-button>
                   </n-space>
                 </div>
 
-                <n-form-item label="Config content">
+                <n-form-item :label="copy.editor.form.content">
                   <div v-if="loadingConfigContent" class="config-loading-shell">
                     <n-spin size="large" />
                   </div>
                   <div v-else-if="editorMode === 'structured' && structuredEditorValue != null" class="structured-shell">
                     <StructuredValueEditor
                       v-model:model-value="structuredEditorValue"
-                      label="Root"
+                      :label="copy.editor.structuredRoot"
                     />
                     <p v-if="configContent?.structured_error" class="host-secondary">
-                      Structured parser warning: {{ configContent.structured_error }}
+                      {{ copy.editor.structuredWarning }}：{{ configContent.structured_error }}
                     </p>
                   </div>
                   <n-input
@@ -1330,7 +1378,7 @@ function toErrorMessage(error: unknown): string {
                     v-model:value="rawEditorContent"
                     type="textarea"
                     :autosize="{ minRows: 14, maxRows: 28 }"
-                    placeholder="Paste the config content that should be written to the selected path"
+                    :placeholder="copy.editor.rawPlaceholder"
                   />
                 </n-form-item>
               </n-form>
@@ -1341,14 +1389,12 @@ function toErrorMessage(error: unknown): string {
             <template #header>
               <div class="card-head">
                 <div>
-                  <h2 class="section-title">Task progress</h2>
-                  <p class="section-subtitle">
-                    Authenticated SSE stream for the current rollout task.
-                  </p>
+                  <h2 class="section-title">{{ copy.progress.title }}</h2>
+                  <p class="section-subtitle">{{ copy.progress.subtitle }}</p>
                 </div>
                 <n-space align="center">
                   <n-tag v-if="currentTaskId" round :bordered="false" type="info">
-                    {{ streaming ? 'Streaming' : 'Idle' }}
+                    {{ streaming ? copy.progress.streamStatus.streaming : copy.progress.streamStatus.idle }}
                   </n-tag>
                   <n-button
                     v-if="currentTask"
@@ -1357,7 +1403,7 @@ function toErrorMessage(error: unknown): string {
                     :disabled="!currentTask"
                     @click="startTaskStream(currentTask.id)"
                   >
-                    Reattach stream
+                    {{ copy.progress.reattach }}
                   </n-button>
                 </n-space>
               </div>
@@ -1365,12 +1411,12 @@ function toErrorMessage(error: unknown): string {
 
             <n-empty
               v-if="!currentTask"
-              description="Start a config push to see task snapshots, node results, and progress here."
+              :description="copy.progress.empty"
               class="empty-state"
             />
 
             <div v-else class="progress-shell">
-              <n-alert v-if="taskStreamError" title="SSE stream issue" type="warning" class="section-alert">
+              <n-alert v-if="taskStreamError" :title="copy.progress.streamIssue" type="warning" class="section-alert">
                 {{ taskStreamError }}
               </n-alert>
 
@@ -1378,7 +1424,7 @@ function toErrorMessage(error: unknown): string {
                 <div>
                   <div class="task-title">{{ currentTask.id }}</div>
                   <div class="task-meta">
-                    {{ currentTask.type }} · {{ currentTask.status }} ·
+                    {{ translateTaskType(currentTask.type) }} · {{ translateTaskStatus(currentTask.status) }} ·
                     {{ currentTask.path }}
                   </div>
                 </div>
@@ -1387,7 +1433,7 @@ function toErrorMessage(error: unknown): string {
                   :bordered="false"
                   round
                 >
-                  {{ currentTask.status }}
+                  {{ translateTaskStatus(currentTask.status) }}
                 </n-tag>
               </div>
 
@@ -1400,27 +1446,27 @@ function toErrorMessage(error: unknown): string {
 
               <div class="progress-stats-grid">
                 <div class="stat-mini">
-                  <span>Total</span>
+                  <span>{{ copy.progress.stats.total }}</span>
                   <strong>{{ currentTask.total_nodes }}</strong>
                 </div>
                 <div class="stat-mini">
-                  <span>Pending</span>
+                  <span>{{ copy.progress.stats.pending }}</span>
                   <strong>{{ currentTask.pending_nodes }}</strong>
                 </div>
                 <div class="stat-mini">
-                  <span>In flight</span>
+                  <span>{{ copy.progress.stats.inFlight }}</span>
                   <strong>{{ currentTask.in_flight_nodes }}</strong>
                 </div>
                 <div class="stat-mini">
-                  <span>Succeeded</span>
+                  <span>{{ copy.progress.stats.succeeded }}</span>
                   <strong>{{ currentTask.succeeded_nodes }}</strong>
                 </div>
                 <div class="stat-mini">
-                  <span>Failed</span>
+                  <span>{{ copy.progress.stats.failed }}</span>
                   <strong>{{ currentTask.failed_nodes }}</strong>
                 </div>
                 <div class="stat-mini">
-                  <span>Skipped</span>
+                  <span>{{ copy.progress.stats.skipped }}</span>
                   <strong>{{ currentTask.skipped_nodes }}</strong>
                 </div>
               </div>
@@ -1434,20 +1480,20 @@ function toErrorMessage(error: unknown): string {
               />
 
               <div class="event-log">
-                <h3 class="mini-title">Recent events</h3>
+                <h3 class="mini-title">{{ copy.progress.recentEvents }}</h3>
                 <div class="event-log__items">
                   <div v-for="event in taskEvents" :key="`${event.time}-${event.event}-${event.node?.node_id || 'task'}`" class="event-item">
                     <div class="event-item__head">
                       <n-tag size="small" :bordered="false" round type="default">
-                        {{ event.event }}
+                        {{ translateTaskEvent(event.event) }}
                       </n-tag>
                       <span class="host-secondary">{{ formatDateTime(event.time) }}</span>
                     </div>
                     <div class="event-item__body">
-                      {{ event.message || event.node?.message || event.task?.status || 'task update' }}
+                      {{ event.message || event.node?.message || translateTaskStatus(event.task?.status || '') || copy.progress.eventFallback }}
                     </div>
                     <div v-if="event.node" class="event-item__meta mono-text">
-                      {{ event.node.node_id }} · {{ event.node.status }}
+                      {{ event.node.node_id }} · {{ translateTaskStatus(event.node.status) }}
                     </div>
                   </div>
                 </div>
@@ -1460,13 +1506,13 @@ function toErrorMessage(error: unknown): string {
       <n-modal
         v-model:show="addNodeModalOpen"
         preset="card"
-        title="Add node"
+        :title="copy.modal.title"
         class="install-modal"
         :mask-closable="!creatingNode"
       >
         <div class="install-modal__body">
           <n-form label-placement="top">
-            <n-form-item label="Display name">
+            <n-form-item :label="copy.modal.displayName">
               <n-input
                 v-model:value="addNodeDisplayName"
                 :placeholder="nextAddNodeDisplayName"
@@ -1476,14 +1522,14 @@ function toErrorMessage(error: unknown): string {
           </n-form>
 
           <n-space justify="end">
-            <n-button secondary @click="closeAddNodeModal">Close</n-button>
+            <n-button secondary @click="closeAddNodeModal">{{ copy.common.close }}</n-button>
             <n-button
               type="primary"
               :loading="creatingNode"
               :disabled="createdNode !== null"
               @click="submitCreateNode"
             >
-              Generate command
+              {{ copy.modal.generateCommand }}
             </n-button>
           </n-space>
 
@@ -1493,9 +1539,9 @@ function toErrorMessage(error: unknown): string {
               <n-button
                 secondary
                 size="small"
-                @click="copyToClipboard(createdNode.install_command, 'Copied install command.')"
+                @click="copyToClipboard(createdNode.install_command, copy.messages.copiedInstallCommand)"
               >
-                Copy
+                {{ copy.common.copy }}
               </n-button>
             </div>
             <n-input
@@ -1505,7 +1551,7 @@ function toErrorMessage(error: unknown): string {
               :autosize="{ minRows: 3, maxRows: 5 }"
             />
             <p class="host-secondary">
-              Expires {{ formatDateTime(createdNode.expires_at) }}. Paste this command on the target VPS.
+              {{ copy.modal.expiresAt(formatDateTime(createdNode.expires_at)) }}
             </p>
           </div>
         </div>

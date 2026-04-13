@@ -9,7 +9,9 @@
       "Bash(chmod:*)",
       "Bash(go build:*)",
       "WebSearch",
-      "WebFetch(domain:nezha.wiki)"
+      "WebFetch(domain:nezha.wiki)",
+      "Skill(ship)",
+      "Bash(gh pr:*)"
     ]
   }
 }
